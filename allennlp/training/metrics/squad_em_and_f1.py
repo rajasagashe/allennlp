@@ -17,9 +17,10 @@ class SquadEmAndF1(Metric):
         self._total_em = 0.0
         self._total_f1 = 0.0
         self._count = 0
+        self._error_cases = []
 
     @overrides
-    def __call__(self, best_span_string, answer_strings):
+    def __call__(self, best_span_string, answer_strings, d=None):
         """
         Parameters
         ----------
@@ -37,6 +38,9 @@ class SquadEmAndF1(Metric):
         self._total_em += exact_match
         self._total_f1 += f1_score
         self._count += 1
+
+        if d and exact_match == 0:
+            self._error_cases.append(d)
 
     @overrides
     def get_metric(self, reset: bool = False) -> Tuple[float, float]:

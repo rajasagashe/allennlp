@@ -66,12 +66,14 @@ class SquadReader(DatasetReader):
                     answer_texts = [answer['text'] for answer in question_answer['answers']]
                     span_starts = [answer['answer_start'] for answer in question_answer['answers']]
                     span_ends = [start + len(answer) for start, answer in zip(span_starts, answer_texts)]
+                    id = question_answer["id"]
                     instance = self.text_to_instance(question_text,
                                                      paragraph,
                                                      zip(span_starts, span_ends),
                                                      answer_texts,
-                                                     tokenized_paragraph)
+                                                     tokenized_paragraph, id)
                     instances.append(instance)
+
         if not instances:
             raise ConfigurationError("No instances were read from the given filepath {}. "
                                      "Is the path correct?".format(file_path))
@@ -83,7 +85,8 @@ class SquadReader(DatasetReader):
                          passage_text: str,
                          char_spans: List[Tuple[int, int]] = None,
                          answer_texts: List[str] = None,
-                         passage_tokens: List[Token] = None) -> Instance:
+                         passage_tokens: List[Token] = None,
+                         id: str = None) -> Instance:
         # pylint: disable=arguments-differ
         if not passage_tokens:
             passage_tokens = self._tokenizer.tokenize(passage_text)
@@ -111,7 +114,9 @@ class SquadReader(DatasetReader):
                                                         self._token_indexers,
                                                         passage_text,
                                                         token_spans,
-                                                        answer_texts)
+                                                        answer_texts,
+                                                        {'question': question_text,
+                                                         'id': id})
 
     @classmethod
     def from_params(cls, params: Params) -> 'SquadReader':

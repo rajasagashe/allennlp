@@ -1,5 +1,6 @@
 import logging
 from typing import Any, Dict, List, Optional
+import json
 
 import torch
 from torch.autograd import Variable
@@ -288,7 +289,10 @@ class BidirectionalAttentionFlow(Model):
                 output_dict['best_span_str'].append(best_span_string)
                 answer_texts = metadata[i].get('answer_texts', [])
                 if answer_texts:
-                    self._squad_metrics(best_span_string, answer_texts)
+                    d = {'passage': passage_str, 'question': metadata[i]['question'],
+                         'answer': answer_texts[0], 'prediction': best_span_string,
+                         'id': metadata[i]['id']}
+                    self._squad_metrics(best_span_string, answer_texts, d)
         return output_dict
 
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
@@ -300,6 +304,16 @@ class BidirectionalAttentionFlow(Model):
                 'em': exact_match,
                 'f1': f1_score,
                 }
+
+    def get_error_cases(self) -> List[Dict[str, str]]:
+        print("DUMPING ERROR CASES")
+        advers = [d for d in self._squad_metrics._error_cases if 'high-conf' in d['id']]
+        print(len(advers), "/", len(self._squad_metrics._error_cases), "errors were A!")
+
+
+        with open('/home/rajas/models/a-errors.json', 'w') as f:
+            json.dump(advers[0:100], f, indent=4)
+
 
     @staticmethod
     def _get_best_span(span_start_logits: Variable, span_end_logits: Variable) -> Variable:

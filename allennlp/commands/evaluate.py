@@ -76,6 +76,7 @@ def evaluate(model: Model,
         description = ', '.join(["%s: %.2f" % (name, value) for name, value in metrics.items()]) + " ||"
         generator_tqdm.set_description(description)
 
+    model.get_error_cases()
     return model.get_metrics()
 
 
