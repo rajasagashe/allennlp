@@ -312,7 +312,7 @@ class BidirectionalAttentionFlow(Model):
 
 
         with open('/home/rajas/models/a-errors.json', 'w') as f:
-            json.dump(advers[0:100], f, indent=4)
+            json.dump(advers, f, indent=4)
 
 
     @staticmethod
