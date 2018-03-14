@@ -231,10 +231,10 @@ class WikiTablesSemanticParser(Model):
         # the order of 1, which means that a 200-dimensional vector would have a dot product with
         # itself on the order of 200.  This is not reasonable to have as input to a softmax, which
         # we do later, so we need to scale by the number of dimensions.
-        question_table_similarity = question_table_similarity.view(batch_size,
-                                                                   num_entities,
-                                                                   num_entity_tokens,
-                                                                   num_question_tokens)
+        question_entity_similarity = question_entity_similarity.view(batch_size,
+                                                                     num_entities,
+                                                                     num_entity_tokens,
+                                                                     num_question_tokens)
 
         # (batch_size, num_entities, num_question_tokens)
         question_entity_similarity_max_score, _ = torch.max(question_entity_similarity, 2)
