@@ -24,11 +24,12 @@ class WikiTablesParserPredictor(Predictor):
     """
 
     def __init__(self, model: Model, dataset_reader: DatasetReader) -> None:
-        super().__init__(model, dataset_reader)
-
+        # config = Params.from_file("training_config/final-acc/temp-glove.json")
         config = Params.from_file("models/final/baseline2-march12/config.json")
         dataset_reader_params = config["dataset_reader"]
         dataset_reader = DatasetReader.from_params(dataset_reader_params)
+
+        super().__init__(model, dataset_reader)
 
         # Load auxiliary sempre files during startup for faster logical form execution.
         os.makedirs(SEMPRE_DIR, exist_ok=True)
