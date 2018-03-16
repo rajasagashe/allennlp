@@ -186,6 +186,16 @@ class WikiTablesSemanticParser(Model):
         embedded_table = self._question_embedder(table_text, num_wrapping_dims=1)
         table_mask = util.get_text_field_mask(table_text, num_wrapping_dims=1).float()
 
+        # x = Variable(embedded_question.data.new(int(self._embedding_dim / 2)).fill_(1))
+        # y = Variable(embedded_question.data.new(int(self._embedding_dim / 2)).fill_(7))
+        # divisor = torch.stack([x, y], dim=0).view(-1, int(self._embedding_dim))
+        # # print(divisor)
+        # # print(divisor.size())
+        # # print(embedded_question)
+        # # print(embedded_question)
+        # embedded_question = embedded_question / divisor
+        # embedded_table = embedded_table / divisor
+
         batch_size, num_entities, num_entity_tokens, _ = embedded_table.size()
         num_question_tokens = embedded_question.size(1)
 
