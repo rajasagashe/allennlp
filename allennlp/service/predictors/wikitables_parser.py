@@ -5,7 +5,7 @@ from typing import Tuple
 from overrides import overrides
 
 from allennlp.common.file_utils import cached_path
-from allennlp.common.util import JsonDict, sanitize
+from allennlp.common.util import JsonDict, sanitize, Params
 from allennlp.data import DatasetReader, Instance
 from allennlp.models import Model
 from allennlp.service.predictors.predictor import Predictor
@@ -25,6 +25,11 @@ class WikiTablesParserPredictor(Predictor):
 
     def __init__(self, model: Model, dataset_reader: DatasetReader) -> None:
         super().__init__(model, dataset_reader)
+
+        config = Params.from_file("models/final/baseline2-march12/config.json")
+        dataset_reader_params = config["dataset_reader"]
+        dataset_reader = DatasetReader.from_params(dataset_reader_params)
+
         # Load auxiliary sempre files during startup for faster logical form execution.
         os.makedirs(SEMPRE_DIR, exist_ok=True)
         abbreviations_path = os.path.join(SEMPRE_DIR, 'abbreviations.tsv')
