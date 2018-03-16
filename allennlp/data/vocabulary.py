@@ -187,6 +187,10 @@ class Vocabulary:
             for namespace in counter:
                 if namespace in pretrained_files:
                     pretrained_list = _read_pretrained_words(pretrained_files[namespace])
+                    print("Writing GLove WOrds into vocab...")
+                    for tp in pretrained_list:
+                        self.add_token_to_namespace(tp, namespace)
+                    print("Finished Writing GLove WOrds into vocab")
                 else:
                     pretrained_list = None
                 token_counts = list(counter[namespace].items())
