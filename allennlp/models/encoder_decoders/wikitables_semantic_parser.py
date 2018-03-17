@@ -131,8 +131,7 @@ class WikiTablesSemanticParser(Model):
             self._linking_params = None
             self._question_entity_params = torch.nn.Linear(1, 1)
             self._question_neighbor_params = torch.nn.Linear(1, 1)
-            # self._glove_linear = torch.nn.Linear(100, 200)
-            self._glove_linear = torch.nn.Linear(1024, 200)
+            self._elmo_linear = torch.nn.Linear(1024, 200)
 
         self._decoder_step = WikiTablesDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
                                                    action_embedding_dim=action_embedding_dim,
@@ -188,18 +187,9 @@ class WikiTablesSemanticParser(Model):
         embedded_table = self._question_embedder(table_text, num_wrapping_dims=1)
         table_mask = util.get_text_field_mask(table_text, num_wrapping_dims=1).float()
 
-        embedded_question = self._glove_linear(embedded_question)
-        embedded_table = self._glove_linear(embedded_table)
-
-        # x = Variable(embedded_question.data.new(int(self._embedding_dim / 2)).fill_(1))
-        # y = Variable(embedded_question.data.new(int(self._embedding_dim / 2)).fill_(7))
-        # divisor = torch.stack([x, y], dim=0).view(-1, int(self._embedding_dim))
-        # # print(divisor)
-        # # print(divisor.size())
-        # # print(embedded_question)
-        # # print(embedded_question)
-        # embedded_question = embedded_question / divisor
-        # embedded_table = embedded_table / divisor
+        # We need to project elmo embedding down since its too big.
+        embedded_question = self._elmo_linear(embedded_question)
+        embedded_table = self._elmo_linear(embedded_table)
 
         batch_size, num_entities, num_entity_tokens, _ = embedded_table.size()
         num_question_tokens = embedded_question.size(1)
