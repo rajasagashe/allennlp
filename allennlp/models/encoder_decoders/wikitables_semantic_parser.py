@@ -234,11 +234,14 @@ class WikiTablesSemanticParser(Model):
         # (batch_size, num_entities, embedding_dim)
         entity_embeddings = torch.nn.functional.tanh(entity_type_embeddings + projected_neighbor_embeddings)
 
+        # compute denominator of cosine similarity:
+        embedded_table_norm = embedded_table / embedded_table.norm(dim=-1, keepdim=True)
+        embedded_question_norm = embedded_question / embedded_question.norm(dim=-1, keepdim=True)
         # Compute entity and question word similarity through a dot product.
-        question_entity_similarity = torch.bmm(embedded_table.view(batch_size,
+        question_entity_similarity = torch.bmm(embedded_table_norm.view(batch_size,
                                                                    num_entities * num_entity_tokens,
                                                                    self._embedding_dim),
-                                               torch.transpose(embedded_question, 1, 2))
+                                               torch.transpose(embedded_question_norm, 1, 2))
 
         # We divide the similarity scores by the embedding dim to reduce the variance of these
         # scores, and put the similarity scores into the same ballpark range as the linking
