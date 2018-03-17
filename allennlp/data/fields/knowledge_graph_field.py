@@ -192,7 +192,9 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
                   for_training: bool = True) -> Dict[str, torch.Tensor]:
         tensors = {}
         desired_num_entities = padding_lengths['num_entities']
-        desired_num_entity_tokens = padding_lengths['num_entity_tokens']
+        desired_num_entity_tokens = min(30, padding_lengths['num_entity_tokens'])
+        if desired_num_entities > 1500:
+            desired_num_entity_tokens = 2
         desired_num_utterance_tokens = padding_lengths['num_utterance_tokens']
         for indexer_name, indexer in self._token_indexers.items():
             padded_entities = util.pad_sequence_to_length(self._indexed_entity_texts[indexer_name],
