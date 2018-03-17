@@ -113,8 +113,8 @@ class WikiTablesSemanticParser(Model):
         self._action_sequence_accuracy = Average()
         self._embed_terminals = embed_terminals
 
-        check_dimensions_match(entity_encoder.get_output_dim(), question_embedder.get_output_dim(),
-                               "entity word average embedding dim", "question embedding dim")
+        # check_dimensions_match(entity_encoder.get_output_dim(), question_embedder.get_output_dim(),
+        #                        "entity word average embedding dim", "question embedding dim")
         if terminal_embedder:
             check_dimensions_match(nonterminal_embedder.get_output_dim(), terminal_embedder.get_output_dim(),
                                    "nonterminal embedding dim", "terminal embedding dim")
@@ -122,7 +122,7 @@ class WikiTablesSemanticParser(Model):
         self._action_padding_index = -1  # the padding value used by IndexField
         action_embedding_dim = nonterminal_embedder.get_output_dim() * 2
         self.num_entity_types = 4  # TODO(mattg): get this in a more principled way somehow?
-        self._embedding_dim = question_embedder.get_output_dim()
+        self._embedding_dim = 200 #question_embedder.get_output_dim()
         self._type_params = torch.nn.Linear(self.num_entity_types, self._embedding_dim)
         self._neighbor_params = torch.nn.Linear(self._embedding_dim, self._embedding_dim)
         if num_linking_features > 0:
@@ -131,6 +131,8 @@ class WikiTablesSemanticParser(Model):
             self._linking_params = None
             self._question_entity_params = torch.nn.Linear(1, 1)
             self._question_neighbor_params = torch.nn.Linear(1, 1)
+            # self._glove_linear = torch.nn.Linear(100, 200)
+            self._glove_linear = torch.nn.Linear(1024, 200)
 
         self._decoder_step = WikiTablesDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
                                                    action_embedding_dim=action_embedding_dim,
@@ -185,6 +187,9 @@ class WikiTablesSemanticParser(Model):
         # (batch_size, num_entities, num_entity_tokens, embedding_dim)
         embedded_table = self._question_embedder(table_text, num_wrapping_dims=1)
         table_mask = util.get_text_field_mask(table_text, num_wrapping_dims=1).float()
+
+        embedded_question = self._glove_linear(embedded_question)
+        embedded_table = self._glove_linear(embedded_table)
 
         # x = Variable(embedded_question.data.new(int(self._embedding_dim / 2)).fill_(1))
         # y = Variable(embedded_question.data.new(int(self._embedding_dim / 2)).fill_(7))
