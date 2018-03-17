@@ -131,8 +131,7 @@ class WikiTablesSemanticParser(Model):
             self._linking_params = None
             self._question_entity_params = torch.nn.Linear(1, 1)
             self._question_neighbor_params = torch.nn.Linear(1, 1)
-            # self._glove_linear = torch.nn.Linear(100, 200)
-            self._glove_linear = torch.nn.Linear(1024, 200)
+            self._glove_linear = torch.nn.Linear(100, 200)
 
         self._decoder_step = WikiTablesDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
                                                    action_embedding_dim=action_embedding_dim,
@@ -188,9 +187,11 @@ class WikiTablesSemanticParser(Model):
         embedded_table = self._question_embedder(table_text, num_wrapping_dims=1)
         table_mask = util.get_text_field_mask(table_text, num_wrapping_dims=1).float()
 
+        # We need to project the glove embedding up since it's too small.
         embedded_question = self._glove_linear(embedded_question)
         embedded_table = self._glove_linear(embedded_table)
 
+        # old code which concatenated the glove to the question embedding and scaled glove values down
         # x = Variable(embedded_question.data.new(int(self._embedding_dim / 2)).fill_(1))
         # y = Variable(embedded_question.data.new(int(self._embedding_dim / 2)).fill_(7))
         # divisor = torch.stack([x, y], dim=0).view(-1, int(self._embedding_dim))
