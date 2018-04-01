@@ -9,13 +9,14 @@ import os
 import json
 
 import re
+import numpy as np
 from overrides import overrides
 
 from allennlp.common.file_utils import cached_path
 from allennlp.common import Params
 from allennlp.common.util import JsonDict
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
-from allennlp.data.fields import Field, IndexField, KnowledgeGraphField, ListField
+from allennlp.data.fields import Field, IndexField, KnowledgeGraphField, ListField, ArrayField
 from allennlp.data.fields import MetadataField, ProductionRuleField, TextField
 from allennlp.data.instance import Instance
 from allennlp.data.token_indexers import TokenIndexer, SingleIdTokenIndexer, TokenCharactersIndexer
@@ -90,25 +91,51 @@ class JavaDatasetReader(DatasetReader):
         code_summary_field = TextField([Token(t) for t in code_summary], self._token_indexers)
         code_field = TextField([Token(t) for t in code], self._token_indexers)
 
+        pre_rules = [r.replace('-->', ' -> ') for r in rules]
         production_rule_fields: List[Field] = []
-        rules = [r.replace('-->', ' -> ') for r in rules]
-        for production_rule in rules:
+        for production_rule in pre_rules:
             field = ProductionRuleField(production_rule,
                                         terminal_indexers=self._terminal_indexers,
                                         nonterminal_indexers=self._nonterminal_indexers,
-                                        is_nonterminal=lambda x: True)  # TODO(rajas) add function here
+                                        # todo refine this
+                                        is_nonterminal=lambda x: (x[0].isupper() or x.startswith("return")))
 
             production_rule_fields.append(field)
 
-        fields = {"code_summary": code_summary_field,
+        # Compute parent rules
+        nt2rule_index = {}
+        for i, rule in enumerate(rules):
+            nt2rule_index[rule.split('-->')[0]] = i
+        rule_parent_index = np.zeros(len(rules)) - 1
+        # print(rules)
+        # print("len rules", len(rules))
+        # print("len nt2rule", len(nt2rule_index))
+        self.compute_rule_parent(rules, rule_parent_index, 0, -1, nt2rule_index)
+        # Pad with -1 since 0 is valid index to rule 0.
+        rule_parent_index_field = ArrayField(rule_parent_index, padding_value=-1)
+
+        fields = {"utterance": code_summary_field,
                   "variable_names": variable_name_fields,
                   "variable_types": variable_types_field,
                   "method_names": method_name_fields,
                   "method_return_types": method_return_types_field,
                   "code": code_field,
-                  "rules": ListField(production_rule_fields)}
+                  "rules": ListField(production_rule_fields),
+                  "rule_parent_index": rule_parent_index_field}
 
         return Instance(fields)
+
+    def compute_rule_parent(self, rules: List[str], rule_parent_index, rule_index, parent_index, nt2rule_index):
+        # print(rule_index)
+        # print(rules[rule_index])
+        rule_parent_index[rule_index] = parent_index
+        lhs, rhs = rules[rule_index].split('-->')
+        for child in rhs.split('___'):
+            if lhs != "IdentifierNT" and child[0].isupper():
+                # Verify that child is a non terminal.
+                child_index = nt2rule_index[child]
+                self.compute_rule_parent(rules, rule_parent_index, child_index, rule_index, nt2rule_index)
+
 
     def add_camel_case_split_tokens(self, words: List[str]) -> ListField:
         fields: List[Field] = []
@@ -121,6 +148,7 @@ class JavaDatasetReader(DatasetReader):
     def split_camel_case(name: str) -> List[str]:
         """
         """
+        # TODO Lowercase them all
         tokens = re.sub('(?!^)([A-Z][a-z]+)', r' \1', name).split()
         if len(tokens) > 1:
             return [name] + tokens
