@@ -91,26 +91,27 @@ class JavaDatasetReader(DatasetReader):
         code_summary_field = TextField([Token(t) for t in code_summary], self._token_indexers)
         code_field = TextField([Token(t) for t in code], self._token_indexers)
 
-        pre_rules = [r.replace('-->', ' -> ') for r in rules]
-        production_rule_fields: List[Field] = []
-        for production_rule in pre_rules:
-            field = ProductionRuleField(production_rule,
-                                        terminal_indexers=self._terminal_indexers,
-                                        nonterminal_indexers=self._nonterminal_indexers,
-                                        # todo refine this
-                                        is_nonterminal=lambda x: (x[0].isupper() or x.startswith("return")))
+        rule_fields = []
+        nonterminal_fields = []
+        for rule in rules:
+            lhs, rhs = rule.split('-->')
+            tokenized_both_sides = [Token(t) for t in ([lhs] + rhs.split('__'))]
+            rule_fields.append(TextField(tokenized_both_sides, self._nonterminal_indexers))
+            nonterminal_fields.append(TextField([Token(lhs)], self._nonterminal_indexers))
 
-            production_rule_fields.append(field)
+
+        # TODO identifier rule as mentioned in the paper should be collapsed to the token
+        # IdentifierOrLiteral
+        prev_rules = rule_fields[:-1]
+        prev_rules.insert(0, TextField([Token('<start>')], self._nonterminal_indexers))
 
         # Compute parent rules
         nt2rule_index = {}
         for i, rule in enumerate(rules):
             nt2rule_index[rule.split('-->')[0]] = i
-        rule_parent_index = np.zeros(len(rules)) - 1
-        # print(rules)
-        # print("len rules", len(rules))
-        # print("len nt2rule", len(nt2rule_index))
-        self.compute_rule_parent(rules, rule_parent_index, 0, -1, nt2rule_index)
+        # todo figure out parent index for non parent index
+        rule_parent_index = np.zeros(len(rules))
+        self.compute_rule_parent(rules, rule_parent_index, 0, 0, nt2rule_index)
         # Pad with -1 since 0 is valid index to rule 0.
         rule_parent_index_field = ArrayField(rule_parent_index, padding_value=-1)
 
@@ -119,8 +120,11 @@ class JavaDatasetReader(DatasetReader):
                   "variable_types": variable_types_field,
                   "method_names": method_name_fields,
                   "method_return_types": method_return_types_field,
+                  # TODO add this into the metadata field for computing bleu score
                   "code": code_field,
-                  "rules": ListField(production_rule_fields),
+                  "rules": ListField(rule_fields),
+                  "nonterminals":ListField(nonterminal_fields),
+                  "prev_rules": ListField(prev_rules),
                   "rule_parent_index": rule_parent_index_field}
 
         return Instance(fields)
