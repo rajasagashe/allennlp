@@ -13,13 +13,17 @@ from allennlp.common import Params
 from allennlp.data.fields.production_rule_field import ProductionRuleArray
 from allennlp.data.vocabulary import Vocabulary
 from allennlp.data.dataset_readers.seq2seq import START_SYMBOL, END_SYMBOL
+from allennlp.models.encoder_decoders.java.java_decoder_step import JavaDecoderStep
+from allennlp.models.encoder_decoders.java.java_decoder_state import JavaDecoderState
 from allennlp.modules import Attention, TextFieldEmbedder, Seq2SeqEncoder, TimeDistributed
 from allennlp.modules.seq2vec_encoders import BagOfEmbeddingsEncoder
 from allennlp.modules.similarity_functions import SimilarityFunction
 from allennlp.modules.token_embedders import Embedding
 from allennlp.models.model import Model
 from allennlp.nn import util
+from allennlp.nn.decoding import RnnState
 from allennlp.nn.util import get_text_field_mask, sequence_cross_entropy_with_logits, weighted_sum
+from allennlp.semparse.type_declarations import JavaGrammarState
 
 
 @Model.register("java_parser")
@@ -50,6 +54,9 @@ class JavaSemanticParser(Model):
         # todo don't hardcode the dim
         self._decoder_cell = LSTMCell(120, self._decoder_output_dim)
         # self._output_projection_layer = Linear(self._decoder_output_dim, num_classes)
+        self._decoder_step = JavaDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
+                                                   # action_embedding_dim=action_embedding_dim,
+                                                   attention_function=attention_function)
 
     @overrides
     def forward(self,  # type: ignore
@@ -124,61 +131,69 @@ class JavaSemanticParser(Model):
 
         # Decoder
         ##################################################
-        embedded_nonterminals = self._nonterminal_embedder(nonterminals)
-        embedded_prev_rules = self._nonterminal_embedder(prev_rules)
-        embedded_rules = self._nonterminal_embedder(rules)
-        batch_size, num_rules, num_rule_tokens, _ = embedded_rules.size()
 
-        boe = BagOfEmbeddingsEncoder(self._embedding_dim, averaged=True)
-        embedded_nonterminals = embedded_nonterminals.squeeze(2)
-        embedded_rules = boe(embedded_rules.view(-1, num_rule_tokens, self._embedding_dim))
-        embedded_rules = embedded_rules.view(batch_size, num_rules, self._embedding_dim)
-        embedded_prev_rules = boe(embedded_prev_rules.view(-1, num_rule_tokens, self._embedding_dim))
-        embedded_prev_rules = embedded_prev_rules.view(batch_size, num_rules, self._embedding_dim)
 
-        rule_parent_index = rule_parent_index.long()
-        embedded_parent_rules = util.batched_index_select(embedded_rules, rule_parent_index)
-
+        # embedded_nonterminals = self._nonterminal_embedder(nonterminals)
+        # embedded_rules = self._nonterminal_embedder(rules)
+        # batch_size, num_rules, num_rule_tokens, _ = embedded_rules.size()
+        #
+        # boe = BagOfEmbeddingsEncoder(self._embedding_dim, averaged=True)
+        # embedded_nonterminals = embedded_nonterminals.squeeze(2)
+        # embedded_rules = boe(embedded_rules.view(-1, num_rule_tokens, self._embedding_dim))
+        # embedded_rules = embedded_rules.view(batch_size, num_rules, self._embedding_dim)
 
 
         hidden_state = encoder_outputs[:, -1]  # (batch_size, encoder_output_dim)
         memory_cell = Variable(encoder_outputs.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
+        attended_utterance, _ = self._decoder_step.attend_on_utterance(hidden_state,
+                                                                       encoder_outputs,
+                                                                       utterance_mask)
 
-        rule_parent_state = [[0] * num_rules] * batch_size
-        context_list = []
-        for i, (nt, prev_rule, parent_rule) in enumerate(zip(embedded_nonterminals.split(1, 1), embedded_prev_rules.split(1, 1), embedded_parent_rules.split(1, 1))):
+        # create rnn state, decoder state, decoder step, fire off trainer
+        # set initial state
+        initial_rnn_state = RnnState(hidden_state,
+                                     memory_cell,
+                                     None, # TODO do we need previous action embedding?
+                                     attended_utterance,
+                                     encoder_outputs,
+                                     utterance_mask)
+        initial_grammar_state = JavaGrammarState()
+        initial_score = Variable(encoder_outputs.data.new(batch_size).fill_(0))
+        initial_state = JavaDecoderState([],
+                                         initial_score,
+                                         initial_rnn_state,
+                                         initial_grammar_state)
 
-            if i == 0:
-                parent_states = Variable(hidden_state.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
-            else:
-                parent_states = []
-                for batch_index in range(batch_size):
-                    parent_index = rule_parent_index[batch_index][i]
-                    parent_state = rule_parent_state[batch_index][parent_index.data[0]]
-                    if type(parent_state) == type(3):
-                        parent_state = Variable(encoder_outputs.data.new(1, self._embedding_dim).fill_(0))
-                    parent_states.append(parent_state)
-                parent_states = torch.cat(parent_states, 0)
-            # print("Sizes")
-            # print(nt.size())
-            # print(prev_rule.size())
-            # print(parent_states.size())
-            decoder_input = torch.cat((nt.squeeze(1), prev_rule.squeeze(1), parent_rule.squeeze(1), parent_states), 1)
-            hidden_state, memory_cell = self._decoder_cell(decoder_input, (hidden_state, memory_cell))
+        if self.training:
+            # embedding for the rhs of gold sequences
+            index = 0
+            allowed_action = rules[index]
 
-            attended_utterance, attention_weights = self.attend_on_utterance(hidden_state,
-                                                                             encoder_outputs,
-                                                                             utterance_mask)
-            # todo add the attention over the variables and methods
-            # compute context as concatenation of hidden state and attended encoder outputs
-            context = torch.cat((hidden_state, attended_utterance), 1)
+            state = initial_state
+            next_states = []
+            for next_state in decode_step.take_step(state, allowed_actions=allowed_action):
+                next_states.append(next_state)
+                state = next_state
+                index += 1
+                allowed_action = rules[index]
 
-            # update rule_parent_state with the current state
-            for batch_index in range(batch_size):
-                rule_parent_state[batch_index][i] = hidden_state[batch_index].unsqueeze(0)
+            loss = 0
+            scores = [s.score for s in next_states]
+            for scores in scores.values():  # we don't care about the batch index, just the scores
+                loss += -util.logsumexp(torch.cat(scores))
+            return {'loss': loss / len(scores)}
 
-            # add to list for prob
-            context_list.append(context)
+        else:
+            print('inference yo')
+            # fire beam search
+            num_steps = self._max_decoding_steps
+            # This tells the state to start keeping track of debug info, which we'll pass along in
+            # our output dictionary.
+
+            best_final_states = self._beam_search.search(num_steps,
+                                                         initial_state,
+                                                         self._decoder_step,
+                                                         keep_final_unfinished_states=False)
 
 
 
