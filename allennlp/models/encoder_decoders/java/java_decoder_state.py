@@ -14,21 +14,21 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                  score: torch.Tensor,
                  rnn_state: RnnState,
                  grammar_state: JavaGrammarState,
-                 nonterminal_embedder: TextFieldEmbedder,
-                 nonterminal: torch.Tensor,
-                 prev_rule: torch.Tensor,
+                 nonterminal: List[Tuple[str, bool, Dict[str, torch.Tensor]]],
+                 # todo change the types on the following 3 parameters
+                 prev_rules: torch.Tensor,
                  nonterminal2parent_rule: Dict[torch.LongTensor, torch.LongTensor],
                  nonterminal2parent_state: Dict[torch.LongTensor, torch.LongTensor]) -> None:
         super(JavaDecoderState, self).__init__(None, action_history, score)
         self._grammar_state = grammar_state
         self._rnn_state = rnn_state
+        self._batch_size = rnn_state.hidden_state.size(0)
         if len(action_history) == 0:
-            # todo insert the method decl starting action in
+            # todo insert the method decl starting action in action history
             print('todo')
 
-        self._nonterminal_embedder = nonterminal_embedder
         self._nonterminal = nonterminal
-        self._prev_rule = prev_rule
+        self._prev_rule = prev_rules
         self._nonterminal2parent_rule = nonterminal2parent_rule
         self._nonterminal2parent_state = nonterminal2parent_state
 
@@ -37,4 +37,5 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         """
         Returns a list of valid actions for each element of the group.
         """
-        return [state.get_valid_actions() for state in self.grammar_state]
+        return self._grammar_state.get_valid_actions()
+        # return [state.get_valid_actions() for state in self.grammar_state]

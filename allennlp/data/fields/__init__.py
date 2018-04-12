@@ -12,6 +12,7 @@ from allennlp.data.fields.multilabel_field import MultiLabelField
 from allennlp.data.fields.list_field import ListField
 from allennlp.data.fields.metadata_field import MetadataField
 from allennlp.data.fields.production_rule_field import ProductionRuleField
+from allennlp.data.fields.java_production_rule_field import JavaProductionRuleField
 from allennlp.data.fields.sequence_field import SequenceField
 from allennlp.data.fields.sequence_label_field import SequenceLabelField
 from allennlp.data.fields.span_field import SpanField

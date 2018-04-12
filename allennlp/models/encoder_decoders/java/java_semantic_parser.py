@@ -56,7 +56,8 @@ class JavaSemanticParser(Model):
         # self._output_projection_layer = Linear(self._decoder_output_dim, num_classes)
         self._decoder_step = JavaDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
                                                    # action_embedding_dim=action_embedding_dim,
-                                                   attention_function=attention_function)
+                                                   attention_function=attention_function,
+                                                   nonterminal_embedder=nonterminal_embedder)
 
     @overrides
     def forward(self,  # type: ignore
@@ -66,23 +67,12 @@ class JavaSemanticParser(Model):
                 method_names: Dict[str, torch.LongTensor],
                 method_return_types: Dict[str, torch.LongTensor],
                 code: Dict[str, torch.LongTensor],
-                rules: Dict[str, torch.LongTensor],
+                # rules: Dict[str, torch.LongTensor],
+                rules: List[List[ProductionRuleArray]],
                 nonterminals: Dict[str, torch.LongTensor],
                 prev_rules: Dict[str, torch.LongTensor],
                 rule_parent_index: torch.LongTensor) -> Dict[str, torch.Tensor]:
-        # pylint: disable=arguments-differ
-        """
-        Decoder logic for producing the entire target sequence.
 
-        Parameters
-        ----------
-        source_tokens : Dict[str, torch.LongTensor]
-           The output of ``TextField.as_array()`` applied on the source ``TextField``. This will be
-           passed through a ``TextFieldEmbedder`` and then through an encoder.
-        target_tokens : Dict[str, torch.LongTensor], optional (default = None)
-           Output of ``Textfield.as_array()`` applied on target ``TextField``. We assume that the
-           target tokens are also represented as a ``TextField``.
-        """
         # (batch_size, input_sequence_length, encoder_output_dim)
 
         # Encode summary, variables, methods with bi lstm.
@@ -128,11 +118,7 @@ class JavaSemanticParser(Model):
         utterance_mask = get_text_field_mask(utterance)
         encoder_outputs = self._encoder(embedded_input, utterance_mask)
         final_encoder_output = encoder_outputs[:, -1]  # (batch_size, encoder_output_dim)
-
         # Decoder
-        ##################################################
-
-
         # embedded_nonterminals = self._nonterminal_embedder(nonterminals)
         # embedded_rules = self._nonterminal_embedder(rules)
         # batch_size, num_rules, num_rule_tokens, _ = embedded_rules.size()
@@ -141,7 +127,6 @@ class JavaSemanticParser(Model):
         # embedded_nonterminals = embedded_nonterminals.squeeze(2)
         # embedded_rules = boe(embedded_rules.view(-1, num_rule_tokens, self._embedding_dim))
         # embedded_rules = embedded_rules.view(batch_size, num_rules, self._embedding_dim)
-
 
         hidden_state = encoder_outputs[:, -1]  # (batch_size, encoder_output_dim)
         memory_cell = Variable(encoder_outputs.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
@@ -157,25 +142,37 @@ class JavaSemanticParser(Model):
                                      attended_utterance,
                                      encoder_outputs,
                                      utterance_mask)
-        initial_grammar_state = JavaGrammarState()
+        initial_grammar_state = JavaGrammarState([], None) # insert first method decl nonterminal
         initial_score = Variable(encoder_outputs.data.new(batch_size).fill_(0))
+
+        nonterminals = [rules[batch_index][0]['left'] for batch_index in range(batch_size)]
         initial_state = JavaDecoderState([],
                                          initial_score,
                                          initial_rnn_state,
-                                         initial_grammar_state)
+                                         initial_grammar_state,
+                                         nonterminals,
+                                         prev_rules=None,
+                                         nonterminal2parent_rule=None,
+                                         nonterminal2parent_state=None) # todo more args
+
+        # nonterminal_embedder: TextFieldEmbedder,
+        # nonterminal: torch.Tensor,
+        # prev_rule: torch.Tensor,
+        # nonterminal2parent_rule: Dict[torch.LongTensor, torch.LongTensor],
+        # nonterminal2parent_state: Dict[torch.LongTensor, torch.LongTensor]
 
         if self.training:
             # embedding for the rhs of gold sequences
-            index = 0
-            allowed_action = rules[index]
+            rule_index = 0
+            allowed_actions = [rules[batch_index][rule_index]['right'] for batch_index in range(batch_size)]
 
             state = initial_state
             next_states = []
-            for next_state in decode_step.take_step(state, allowed_actions=allowed_action):
+            for next_state in self._decoder_step.take_step(state, allowed_actions=allowed_actions):
                 next_states.append(next_state)
                 state = next_state
-                index += 1
-                allowed_action = rules[index]
+                rule_index += 1
+                allowed_actions = [rules[batch_index][rule_index]['right'] for batch_index in range(batch_size)]
 
             loss = 0
             scores = [s.score for s in next_states]
@@ -201,31 +198,6 @@ class JavaSemanticParser(Model):
         ############################################################################
         # todo find loss from the context list
         return {"loss": 0.0}
-
-
-    def attend_on_utterance(self,
-                           query: torch.Tensor,
-                           encoder_outputs: torch.Tensor,
-                           encoder_output_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Given a query (which is typically the decoder hidden state), compute an attention over the
-        output of the utterance encoder, and return a weighted sum of the utterance representations
-        given this attention.  We also return the attention weights themselves.
-
-        This is a simple computation, but we have it as a separate method so that the ``forward``
-        method on the main parser module can call it on the initial hidden state, to simplify the
-        logic in ``take_step``.
-        """
-        # (group_size, utterance_length)
-        utterance_attention_weights = self._input_attention(query,
-                                                            encoder_outputs,
-                                                            encoder_output_mask.float())
-        # (group_size, encoder_output_dim)
-        attended_utterance = util.weighted_sum(encoder_outputs, utterance_attention_weights)
-        return attended_utterance, utterance_attention_weights
-
-
-
 
     @staticmethod
     def _get_loss(logits: torch.LongTensor,

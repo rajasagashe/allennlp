@@ -16,7 +16,7 @@ from allennlp.common.file_utils import cached_path
 from allennlp.common import Params
 from allennlp.common.util import JsonDict
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
-from allennlp.data.fields import Field, IndexField, KnowledgeGraphField, ListField, ArrayField
+from allennlp.data.fields import Field, IndexField, KnowledgeGraphField, ListField, ArrayField, JavaProductionRuleField
 from allennlp.data.fields import MetadataField, ProductionRuleField, TextField
 from allennlp.data.instance import Instance
 from allennlp.data.token_indexers import TokenIndexer, SingleIdTokenIndexer, TokenCharactersIndexer
@@ -91,6 +91,16 @@ class JavaDatasetReader(DatasetReader):
         code_summary_field = TextField([Token(t) for t in code_summary], self._token_indexers)
         code_field = TextField([Token(t) for t in code], self._token_indexers)
 
+
+        pre_rules = [r.replace('-->', ' -> ') for r in rules]
+        production_rule_fields: List[Field] = []
+        for production_rule in pre_rules:
+            field = JavaProductionRuleField(production_rule,
+                                        terminal_indexers=self._terminal_indexers,
+                                        nonterminal_indexers=self._nonterminal_indexers,
+                                        is_nonterminal=lambda x: True)  # TODO(rajas) add function here
+            production_rule_fields.append(field)
+
         rule_fields = []
         nonterminal_fields = []
         for rule in rules:
@@ -122,7 +132,8 @@ class JavaDatasetReader(DatasetReader):
                   "method_return_types": method_return_types_field,
                   # TODO add this into the metadata field for computing bleu score
                   "code": code_field,
-                  "rules": ListField(rule_fields),
+                  # "rules": ListField(rule_fields),
+                  "rules": ListField(production_rule_fields),
                   "nonterminals":ListField(nonterminal_fields),
                   "prev_rules": ListField(prev_rules),
                   "rule_parent_index": rule_parent_index_field}
