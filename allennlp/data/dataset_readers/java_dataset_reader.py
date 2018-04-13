@@ -26,16 +26,16 @@ LITERALS_TO_TRIM = ["IdentifierNT", "Nt_decimal_literal", "Nt_char_literal",   "
 class JavaDatasetReader(DatasetReader):
     def __init__(self,
                  utterance_indexers: Dict[str, TokenIndexer],
-                 nonterminal_indexers: Dict[str, TokenIndexer],
-                 identifier_indexers: Dict[str, TokenIndexer],
-                 type_indexers: Dict[str, TokenIndexer],
+                 # nonterminal_indexers: Dict[str, TokenIndexer],
+                 # identifier_indexers: Dict[str, TokenIndexer],
+                 # type_indexers: Dict[str, TokenIndexer],
                  tokenizer: Tokenizer = None,
                  lazy: bool = False) -> None:
         super().__init__(lazy)
         self._utterance_indexers = utterance_indexers
-        self._nonterminal_indexers = nonterminal_indexers
-        self._identifier_indexers = identifier_indexers
-        self._type_indexers = type_indexers
+        # self._nonterminal_indexers = nonterminal_indexers
+        # self._identifier_indexers = identifier_indexers
+        # self._type_indexers = type_indexers
         self._tokenizer = tokenizer or WordTokenizer()
 
     @overrides
@@ -53,7 +53,7 @@ class JavaDatasetReader(DatasetReader):
         lhs2unique_rhs, max_rhs_length = self.filter_grammar(dataset)
         # lhs2actions_field = MetadataField(lhs2actions)
 
-        global_production_rule_field, rule2index = self.get_grammar_field(lhs2unique_rhs, max_rhs_length)
+        global_production_rule_field, rule2index = self.get_grammar_field(lhs2unique_rhs)
 
 
         logger.info("Reading the dataset")
@@ -69,14 +69,11 @@ class JavaDatasetReader(DatasetReader):
                                              rule2index)
             yield instance
 
-    def get_grammar_field(self, lhs2all_rhs, max_rhs_length):
-        # production_rule_fields = [JavaProductionRuleField(lhs='', rhs_tokens=[], max_rhs_length=max_rhs_length, nonterminal_indexers=self._nonterminal_indexers)]
-        # production_rule_fields = [ProductionRuleField(rule='', nonterminal_indexers={},is_nonterminal=lambda x: False)]
+    def get_grammar_field(self, lhs2all_rhs):
         production_rule_fields = []
 
         rule2index = {}
-        # todo throw a padding field on here
-        index = 1
+        index = 0
         for lhs, all_rhs in lhs2all_rhs.items():
             for rhs in all_rhs:
                 rule = lhs+' -> '+'___'.join(rhs)
@@ -145,7 +142,7 @@ class JavaDatasetReader(DatasetReader):
         utterance_field = TextField([Token(t) for t in utterance], self._utterance_indexers)
         # code_field = TextField([Token(t) for t in code], self._utterance_indexers)
 
-        # todo rajas deal with the 0 padding.
+        # todo rajas remove the UNKS here
         rule_indexes = []
         for rule in rules:
             if rule in rule2index:
@@ -191,13 +188,11 @@ class JavaDatasetReader(DatasetReader):
         lazy = params.pop('lazy', False)
         tokenizer = Tokenizer.from_params(params.pop('tokenizer', {}))
         utterance_indexers = TokenIndexer.dict_from_params(params.pop('utterance_indexers'))
-        nonterminal_indexers = TokenIndexer.dict_from_params(params.pop('nonterminal_indexers'))
-        identifier_indexers = TokenIndexer.dict_from_params(params.pop('identifier_indexers'))
-        type_indexers = TokenIndexer.dict_from_params(params.pop('type_indexers'))
+        # identifier_indexers = TokenIndexer.dict_from_params(params.pop('identifier_indexers'))
+        # type_indexers = TokenIndexer.dict_from_params(params.pop('type_indexers'))
         params.assert_empty(cls.__name__)
         return cls(utterance_indexers=utterance_indexers,
-                   nonterminal_indexers=nonterminal_indexers,
-                   identifier_indexers=identifier_indexers,
-                   type_indexers=type_indexers,
+                   # identifier_indexers=identifier_indexers,
+                   # type_indexers=type_indexers,
                    tokenizer=tokenizer,
                    lazy=lazy)

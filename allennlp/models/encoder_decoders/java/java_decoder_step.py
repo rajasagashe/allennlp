@@ -98,7 +98,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         encoder_output_mask = torch.stack([state.rnn_state[0].encoder_output_mask[i] for i in state.batch_indices])
         attended_question, attention_weights = self.attend_on_question(hidden_state,
                                                                        encoder_outputs,
-                                                                       encoder_output_mask)
+                                                                       encoder_output_mask.float())
 
         # To predict an action, we'll use a concatenation of the hidden state and attention over
         # the question.  We'll just predict an _embedding_, which we will compare to embedded
@@ -108,9 +108,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # (group_size, action_embedding_dim)
         predicted_action_embedding = self._dropout(self._output_projection_layer(action_query))
 
-        considered_actions, actions_to_embed, actions_to_link = self._get_actions_to_consider(state)
-        # For now we're focusing on embedded actions
+        # considered_actions, actions_to_embed, actions_to_link = self._get_actions_to_consider(state)
         actions_to_link = []
+        considered_actions, actions_to_embed = self._get_actions_to_consider(state)
+        # For now we're focusing on embedded actions
 
         # action_embeddings: (group_size, num_embedded_actions, action_embedding_dim)
         # action_mask: (group_size, num_embedded_actions)
@@ -249,7 +250,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                     linked_actions[-1].append(action_index)
                 else:
                     embedded_actions[-1].append(global_action_index)
-
         num_embedded_actions = max(len(actions) for actions in embedded_actions)
         num_linked_actions = max(len(actions) for actions in linked_actions)
         if num_linked_actions == 0:
@@ -271,7 +271,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             # Finally, we pad the linked portion.
             while len(considered_actions[-1]) < num_embedded_actions + num_linked_actions:
                 considered_actions[-1].append(-1)
-        return considered_actions, embedded_actions, linked_actions
+        # return considered_actions, embedded_actions, linked_actions
+        return considered_actions, embedded_actions
 
     @staticmethod
     def _get_action_embeddings(state: JavaDecoderState,
@@ -451,7 +452,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 if action == -1:
                     # This was padding.
                     continue
-                if allowed_actions is not None and action not in allowed_actions[group_index]:
+                if allowed_actions is not None and action != allowed_actions[group_index]:
                     # This happens when our _decoder trainer_ wants us to only evaluate certain
                     # actions, likely because they are the gold actions in this state.  We just skip
                     # emitting any state that isn't allowed by the trainer, because constructing the
@@ -508,9 +509,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                    action_embeddings=state.action_embeddings,
                                                    action_indices=state.action_indices,
                                                    possible_actions=state.possible_actions,
-                                                   flattened_linking_scores=state.flattened_linking_scores,
-                                                   actions_to_entities=state.actions_to_entities,
-                                                   entity_types=state.entity_types,
-                                                   debug_info=new_debug_info)
+                                                   # flattened_linking_scores=state.flattened_linking_scores,
+                                                   # actions_to_entities=state.actions_to_entities,
+                                                   # entity_types=state.entity_types,
+                                                   # debug_info=new_debug_info
+                                                    )
                 new_states.append(new_state)
         return new_states

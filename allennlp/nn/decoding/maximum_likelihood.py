@@ -21,8 +21,7 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
     def decode(self,
                initial_state: DecoderState,
                decode_step: DecoderStep,
-               batch_rules: List[Tuple[str, Tuple[str, ...]]],
-               action_map: Dict[Tuple[int, int], int]) -> Dict[str, torch.Tensor]:
+               batch_rules: List[Tuple[str, Tuple[str, ...]]]) -> Dict[str, torch.Tensor]:
         # targets, target_mask = supervision
         # allowed_transitions = self._create_allowed_transitions(targets, target_mask)
         finished_states = []
@@ -36,12 +35,12 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
             next_states = []
             # We group together all current states to get more efficient (batched) computation.
 
-            start = time.time()
+            # start = time.time()
             grouped_state = states[0].combine_states(states)
-            end = time.time() - start
-            print("Time to combine states", end)
-            # todo this comes after step num since the 1st rule is padding, remove padding rule
-            allowed_actions = self._get_allowed_actions(grouped_state, step_num, batch_rules, action_map)
+            # end = time.time() - start
+            # print("Time to combine states", end)
+
+            allowed_actions = self._get_allowed_actions(grouped_state, step_num, batch_rules)
             step_num += 1
 
 
@@ -66,6 +65,7 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
         # for state in next_states:
         #     print("lalala")
         #     print(state.grammar_state.generated_rules)
+        # print(actions_taken)
 
         batch_scores = self._group_scores_by_batch(finished_states)
         loss = 0
@@ -74,14 +74,14 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
         return {'loss': loss / len(batch_scores)}
 
     @staticmethod
-    def _get_allowed_actions(state: DecoderState, step_num: int, batch_rules, action_map: Dict[Tuple[int, int], int]):
-        # This method needs to map from the local action index to the global
+    def _get_allowed_actions(state: DecoderState, step_num: int, batch_rules):
+        # This method just returns index of local actions, since considered uses local indices.
         allowed_actions = []
-        for batch_index in zip(state.batch_indices):
+        for batch_index in state.batch_indices:
             # [rules[step_num].data.cpu().numpy().tolist()[0] for rules in batch_rules]
             action = batch_rules[batch_index][step_num].data.cpu().numpy().tolist()[0]
-            global_action = action_map[batch_index][action]
-            allowed_actions.append(global_action)
+            # global_action = action_map[(batch_index, action)]
+            allowed_actions.append(action)
             # allowed_actions.append(allowed_transitions[batch_index][tuple(action_history)])
         return allowed_actions
 

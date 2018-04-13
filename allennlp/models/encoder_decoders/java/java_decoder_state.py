@@ -16,26 +16,28 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                  batch_indices: List[int],
                  action_history: List[List[str]],
                  score: List[torch.Tensor],
-                 rnn_states: List[RnnState],
+                 rnn_state: List[RnnState],
                  grammar_state: List[JavaGrammarState],
-                 nonterminal_action_indices: List[int],
+                 # nonterminal_action_indices: List[int],
                  action_embeddings: torch.Tensor,
                  action_indices: Dict[Tuple[int, int], int],
                  possible_actions: List[List[ProductionRuleArray]],
-                 prev_rules: List[torch.Tensor],
-                 nonterminal2parent_rules: List[Dict[str, torch.LongTensor]],
-                 nonterminal2parent_states: List[Dict[str, torch.LongTensor]]) -> None:
+                 debug_info: List = None
+                 # prev_rules: List[torch.Tensor],
+                 # nonterminal2parent_rules: List[Dict[str, torch.LongTensor]],
+                 # nonterminal2parent_states: List[Dict[str, torch.LongTensor]]
+                 ) -> None:
         super(JavaDecoderState, self).__init__(batch_indices, action_history, score)
-        self.rnn_states = rnn_states
+        self.rnn_state = rnn_state
         self.grammar_state = grammar_state
         self.action_embeddings = action_embeddings
         self.action_indices = action_indices
         self.possible_actions = possible_actions
-
-        self.nonterminal_action_indices = nonterminal_action_indices
-        self.prev_rules = prev_rules
-        self.nonterminal2parent_rules = nonterminal2parent_rules
-        self.nonterminal2parent_states = nonterminal2parent_states
+        self.debug_info = debug_info
+        # self.nonterminal_action_indices = nonterminal_action_indices
+        # self.prev_rules = prev_rules
+        # self.nonterminal2parent_rules = nonterminal2parent_rules
+        # self.nonterminal2parent_states = nonterminal2parent_states
 
     def get_valid_actions(self) -> List[torch.Tensor]:
         """
@@ -53,31 +55,34 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         batch_indices = [batch_index for state in states for batch_index in state.batch_indices]
         action_histories = [action_history for state in states for action_history in state.action_history]
         scores = [score for state in states for score in state.score]
-        rnn_states = [rnn_state for state in states for rnn_state in state.rnn_states]
+        rnn_state = [rnn_state for state in states for rnn_state in state.rnn_state]
         grammar_states = [grammar_state for state in states for grammar_state in state.grammar_state]
-
-
+        if states[0].debug_info is not None:
+            debug_info = [debug_info for state in states for debug_info in state.debug_info]
+        else:
+            debug_info = None
         # nonterminals = [nonterminal for state in states for nonterminal in state.nonterminals]
-        prev_rules = [prev_rule for state in states for prev_rule in state.prev_rules]
-        nonterminal_action_indices = [nonterminal_action_index for state in states for nonterminal_action_index in state.nonterminal_action_indices]
+        # prev_rules = [prev_rule for state in states for prev_rule in state.prev_rules]
+        # nonterminal_action_indices = [nonterminal_action_index for state in states for nonterminal_action_index in state.nonterminal_action_indices]
         # print("Combine len prev rules", len(prev_rules))
         # print("Combine len states", len(states))
-        nonterminal2parent_rules = [nonterminal2parent_rule for state in states for nonterminal2parent_rule in state.nonterminal2parent_rules]
-        nonterminal2parent_states = [nonterminal2parent_state for state in states for nonterminal2parent_state in state.nonterminal2parent_states]
+        # nonterminal2parent_rules = [nonterminal2parent_rule for state in states for nonterminal2parent_rule in state.nonterminal2parent_rules]
+        # nonterminal2parent_states = [nonterminal2parent_state for state in states for nonterminal2parent_state in state.nonterminal2parent_states]
 
         return JavaDecoderState(batch_indices=batch_indices,
                                 action_history=action_histories,
                                 score=scores,
-                                rnn_states=rnn_states,
+                                rnn_state=rnn_state,
                                 action_embeddings=states[0].action_embeddings,
                                 action_indices=states[0].action_indices,
                                 grammar_state=grammar_states,
                                 possible_actions=states[0].possible_actions,
+                                debug_info=debug_info
                                 # nonterminals=nonterminals,
-                                nonterminal_action_indices=nonterminal_action_indices,
-                                prev_rules=prev_rules,
-                                nonterminal2parent_rules=nonterminal2parent_rules,
-                                nonterminal2parent_states=nonterminal2parent_states,
+                                # nonterminal_action_indices=nonterminal_action_indices,
+                                # prev_rules=prev_rules,
+                                # nonterminal2parent_rules=nonterminal2parent_rules,
+                                # nonterminal2parent_states=nonterminal2parent_states,
                                 # lhs2indexed=states[0].lhs2indexed,
                                 # rhs2indexed=states[0].rhs2indexed
                                 )

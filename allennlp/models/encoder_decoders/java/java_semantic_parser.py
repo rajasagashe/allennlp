@@ -32,6 +32,7 @@ from allennlp.models.encoder_decoders.java.java_decoder_step import JavaDecoderS
 # from java_programmer.models.maximum_likelihood import MaximumLikelihood
 
 START_SYMBOL = "MemberDeclaration"
+# START_SYMBOL = "MethodDeclaration"
 
 @Model.register("java_parser")
 class JavaSemanticParser(Model):
@@ -163,25 +164,22 @@ class JavaSemanticParser(Model):
                                                action_embeddings=action_embeddings,
                                                action_indices=action_indices,
                                                possible_actions=actions,
-                                               flattened_linking_scores=flattened_linking_scores,
-                                               actions_to_entities=actions_to_entities,
-                                               entity_types=entity_type_dict,
+                                               # flattened_linking_scores=flattened_linking_scores,
+                                               # actions_to_entities=actions_to_entities,
+                                               # entity_types=entity_type_dict,
                                                debug_info=None)
 
 
         if self.training:
             return self._decoder_trainer.decode(initial_state,
                                                 self._decoder_step,
-                                                rules,
-                                                action_map)
+                                                rules)
         else:
             outputs = {}
             if rules is not None:
                 outputs['loss'] = self._decoder_trainer.decode(initial_state,
                                              self._decoder_step,
                                              rules)['loss']
-            # print("Decoding------------")
-            # print('nonterminal action indices', nonterminals_action_indices)
             num_steps = self._max_decoding_steps
             best_final_states = self._decoder_beam_search.search(num_steps,
                                                                  initial_state,
@@ -197,46 +195,29 @@ class JavaSemanticParser(Model):
                                                             rules[i])
                     self._action_sequence_accuracy(credit)
                     outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history[0])
-                # todo rajas remove else
-                # else:
-                #     credit = 0
-                #     if rules is not None:
-                #         credit = self._action_history_match(best_final_states[i].action_history[0],
-                #                                             rules[i])
-                #     self._action_sequence_accuracy(credit)
-                #     outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history[0])
+
             return outputs
 
     @staticmethod
     def _action_history_match(predicted: List[int], targets: torch.LongTensor) -> int:
-        # Check if target is big enough to cover prediction (including start/end symbols)
-
-        # print("Predicted", predicted)
-        # print("Target", targets)
-        # if len(predicted) > targets.size(0):
-        #     return 0
         min_length = min(len(predicted), targets.size(0))
+        max_length = max(len(predicted), targets.size(0))
 
-        # todo(rajas) target is padded with 0's so you need to remove those firstly:
-        # todo change the padding to -1 as it's more clear
-
-        # predicted_tensor = targets.data.new(predicted)
         predicted_tensor = Variable(targets.data.new(predicted))
         predicted_tensor = predicted_tensor[:min_length].long()
         targets_trimmed = targets[:min_length].long()
-        # Return 1 if the predicted sequence is anywhere in the list of targets.
-        x = targets_trimmed.eq(predicted_tensor)
-        num_correct = torch.sum(x)
+
+        correct_tensor = targets_trimmed.eq(predicted_tensor)
+        num_correct = torch.sum(correct_tensor)
         num_correct = num_correct.data.cpu().numpy().tolist()[0]
-        # print('numcorrect', num_correct)
-        return num_correct / min_length
+        return num_correct / max_length
 
 
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         return {
             'parse_acc': self._action_sequence_accuracy.get_metric(reset)
         }
-        # return {metric_name: metric.get_metric(reset) for metric_name, metric in self.metrics.items()}
+        # todo(rajas) add blue score
 
     @staticmethod
     def _create_grammar_state(possible_actions: List[ProductionRuleArray]) -> JavaGrammarState:
