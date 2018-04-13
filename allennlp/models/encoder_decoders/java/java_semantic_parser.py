@@ -1,63 +1,95 @@
-from typing import Dict, Tuple, List, Set
+from collections import defaultdict
+from typing import Dict, Tuple, List, Set, Any
 
-import numpy
+from allennlp.training.metrics import Average
 from overrides import overrides
 
 import torch
 from torch.autograd import Variable
 from torch.nn.modules.rnn import LSTMCell
-from torch.nn.modules.linear import Linear
-import torch.nn.functional as F
 
 from allennlp.common import Params
-from allennlp.data.fields.production_rule_field import ProductionRuleArray
 from allennlp.data.vocabulary import Vocabulary
-from allennlp.data.dataset_readers.seq2seq import START_SYMBOL, END_SYMBOL
-from allennlp.models.encoder_decoders.java.java_decoder_step import JavaDecoderStep
-from allennlp.models.encoder_decoders.java.java_decoder_state import JavaDecoderState
-from allennlp.modules import Attention, TextFieldEmbedder, Seq2SeqEncoder, TimeDistributed
-from allennlp.modules.seq2vec_encoders import BagOfEmbeddingsEncoder
-from allennlp.modules.similarity_functions import SimilarityFunction
+from allennlp.modules import Attention, TextFieldEmbedder, Seq2SeqEncoder
 from allennlp.modules.token_embedders import Embedding
+from allennlp.modules.similarity_functions import SimilarityFunction
 from allennlp.models.model import Model
 from allennlp.nn import util
-from allennlp.nn.decoding import RnnState
-from allennlp.nn.util import get_text_field_mask, sequence_cross_entropy_with_logits, weighted_sum
-from allennlp.semparse.type_declarations import JavaGrammarState
+from allennlp.nn.util import get_text_field_mask
+from allennlp.data.fields.production_rule_field import ProductionRuleArray
+from allennlp.nn.decoding import BeamSearch, JavaGrammarState, MaximumLikelihood, RnnState
+from allennlp.models.encoder_decoders.java.java_decoder_state import JavaDecoderState
+from allennlp.models.encoder_decoders.java.java_decoder_step import JavaDecoderStep
 
+# from java_programmer.allennlp_in_progress.data.vocabulary import Vocabulary
+# from java_programmer.allennlp_in_progress.nn import util
+# from java_programmer.allennlp_in_progress.beam_search import BeamSearch
+# from java_programmer.allennlp_in_progress.rnn_state import RnnState
+# from java_programmer.fields.java_production_rule_field import ProductionRuleArray
+# from java_programmer.models.java_decoder_step import JavaDecoderStep
+# from java_programmer.models.java_decoder_state import JavaDecoderState
+# from java_programmer.grammar.java_grammar_state import JavaGrammarState
+# from java_programmer.models.maximum_likelihood import MaximumLikelihood
+
+START_SYMBOL = "MemberDeclaration"
 
 @Model.register("java_parser")
 class JavaSemanticParser(Model):
     def __init__(self,
                  vocab: Vocabulary,
-                 source_embedder: TextFieldEmbedder,
+                 utterance_embedder: TextFieldEmbedder,
                  encoder: Seq2SeqEncoder,
+                 # nonterminal_embedder: TextFieldEmbedder,
                  max_decoding_steps: int,
-                 nonterminal_embedder: TextFieldEmbedder,
-                 terminal_embedder: TextFieldEmbedder,
-                 target_namespace: str = "tokens",
-                 target_embedding_dim: int = None,
-                 attention_function: SimilarityFunction = None,
-                 scheduled_sampling_ratio: float = 0.0) -> None:
+                 decoder_beam_search: BeamSearch,
+                 action_embedding_dim: int,
+                 dropout: float = 0.0,
+                 num_linking_features: int = 8,
+                 rule_namespace: str = 'rule_labels',
+                 attention_function: SimilarityFunction = None) -> None:
         super(JavaSemanticParser, self).__init__(vocab)
-        self._source_embedder = source_embedder
-        self._nonterminal_embedder = nonterminal_embedder
-        self._terminal_embedder = terminal_embedder
+        self._utterance_embedder = utterance_embedder
+        # self._embed_terminals = True
+        # self._nonterminal_embedder = nonterminal_embedder
+        # self._terminal_embedder = nonterminal_embedder
+
+        self._max_decoding_steps = max_decoding_steps
+        self._decoder_beam_search = decoder_beam_search
 
         self._encoder = encoder
 
-        self._embedding_dim = self._nonterminal_embedder.get_output_dim()
-        self._decoder_output_dim = self._encoder.get_output_dim()
+        # self._embedding_dim = self._nonterminal_embedder.get_output_dim()
+        # self._decoder_output_dim = self._encoder.get_output_dim()
 
         self._input_attention = Attention(attention_function)
-        # TODO (pradeep): Do not hardcode decoder cell type.
-        # todo don't hardcode the dim
-        self._decoder_cell = LSTMCell(120, self._decoder_output_dim)
-        # self._output_projection_layer = Linear(self._decoder_output_dim, num_classes)
+
+        # self._decoder_step = JavaDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
+        #                                      attention_function=attention_function,
+        #                                      nonterminal_embedder=nonterminal_embedder)
+        self._decoder_trainer = MaximumLikelihood()
+        self._action_sequence_accuracy = Average()
+
+        if dropout > 0:
+            self._dropout = torch.nn.Dropout(p=dropout)
+        else:
+            self._dropout = lambda x: x
+        self._rule_namespace = rule_namespace
+
+        self._action_padding_index = -1  # the padding value used by IndexField
+        self._action_embedder = Embedding(num_embeddings=vocab.get_vocab_size(self._rule_namespace),
+                                          embedding_dim=action_embedding_dim)
+
+        # This is what we pass as input in the first step of decoding, when we don't have a
+        # previous action, or a previous question attention.
+        self._first_action_embedding = torch.nn.Parameter(torch.FloatTensor(action_embedding_dim))
+        self._first_attended_question = torch.nn.Parameter(torch.FloatTensor(encoder.get_output_dim()))
+        torch.nn.init.normal(self._first_action_embedding)
+        torch.nn.init.normal(self._first_attended_question)
+
         self._decoder_step = JavaDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
-                                                   # action_embedding_dim=action_embedding_dim,
+                                                   action_embedding_dim=action_embedding_dim,
                                                    attention_function=attention_function,
-                                                   nonterminal_embedder=nonterminal_embedder)
+                                                   dropout=dropout)
 
     @overrides
     def forward(self,  # type: ignore
@@ -66,210 +98,215 @@ class JavaSemanticParser(Model):
                 variable_types: Dict[str, torch.LongTensor],
                 method_names: Dict[str, torch.LongTensor],
                 method_return_types: Dict[str, torch.LongTensor],
-                code: Dict[str, torch.LongTensor],
-                # rules: Dict[str, torch.LongTensor],
-                rules: List[List[ProductionRuleArray]],
-                nonterminals: Dict[str, torch.LongTensor],
-                prev_rules: Dict[str, torch.LongTensor],
-                rule_parent_index: torch.LongTensor) -> Dict[str, torch.Tensor]:
-
-        # (batch_size, input_sequence_length, encoder_output_dim)
+                actions: List[List[ProductionRuleArray]],
+                rules: List[torch.Tensor]) -> Dict[str, torch.Tensor]:
 
         # Encode summary, variables, methods with bi lstm.
         ##################################################
-        """
-        embedded_code_summary = self._source_embedder(code_summary)
-        code_summary_mask = get_text_field_mask(code_summary)
 
-        embedded_variable_names = self._source_embedder(variable_names)
-        embedded_variable_types = self._source_embedder(variable_types)
-
-        # embedded_method_names = self._source_embedder(method_names)
-        # embedded_method_return_types = self._source_embedder(method_return_types)
-
-        encoder = TimeDistributed(self._encoder)
-        variable_name_mask = get_text_field_mask(variable_names, num_wrapping_dims=1)
-        encoded_variable_names = encoder(embedded_variable_names, variable_name_mask)
-
-        # method_name_mask = get_text_field_mask(method_names, num_wrapping_dims=1)
-        # encoded_method_names = encoder(embedded_method_names, method_name_mask)
-
-        variable_name_type_input = torch.cat((encoded_variable_names, embedded_variable_types.unsqueeze(2)), dim=2)
-        variable_type_mask = get_text_field_mask(variable_types).unsqueeze(-1)
-        variable_name_type_mask = torch.cat((variable_name_mask, variable_type_mask), dim=2)
-        encoded_variable_names_types = encoder(variable_name_type_input, variable_name_type_mask)
-
-        encoded_code_summary = self._encoder(embedded_code_summary, code_summary_mask)
-
-
-        embedded_input = self._source_embedder(source_tokens)
-        batch_size, _, _ = embedded_input.size()
-        source_mask = get_text_field_mask(source_tokens)
-        encoder_outputs = self._encoder(embedded_input, source_mask)
-
-
-        encoder_outputs = torch.cat(encoded_code_summary, encoded_variable_names_types, dim=1)
-
-        final_encoder_output = encoded_code_summary[:, -1]  # (batch_size, encoder_output_dim)
-        """
         # (batch_size, input_sequence_length, encoder_output_dim)
-        embedded_input = self._source_embedder(utterance)
-        batch_size, _, _ = embedded_input.size()
+        embedded_utterance = self._utterance_embedder(utterance)
+        batch_size, _, _ = embedded_utterance.size()
         utterance_mask = get_text_field_mask(utterance)
-        encoder_outputs = self._encoder(embedded_input, utterance_mask)
-        final_encoder_output = encoder_outputs[:, -1]  # (batch_size, encoder_output_dim)
-        # Decoder
-        # embedded_nonterminals = self._nonterminal_embedder(nonterminals)
-        # embedded_rules = self._nonterminal_embedder(rules)
-        # batch_size, num_rules, num_rule_tokens, _ = embedded_rules.size()
-        #
-        # boe = BagOfEmbeddingsEncoder(self._embedding_dim, averaged=True)
-        # embedded_nonterminals = embedded_nonterminals.squeeze(2)
-        # embedded_rules = boe(embedded_rules.view(-1, num_rule_tokens, self._embedding_dim))
-        # embedded_rules = embedded_rules.view(batch_size, num_rules, self._embedding_dim)
 
-        hidden_state = encoder_outputs[:, -1]  # (batch_size, encoder_output_dim)
+        # (batch_size, question_length, encoder_output_dim)
+        # todo(rajas): add the dropout back in
+        # encoder_outputs = self._dropout(self._encoder(embedded_utterance, utterance_mask))
+        encoder_outputs = self._encoder(embedded_utterance, utterance_mask)
+
+        # This will be our initial hidden state and memory cell for the decoder LSTM.
+        # todo(rajas) change back to encoder is bidirectional from True
+        final_encoder_output = util.get_final_encoder_states(encoder_outputs,
+                                                             utterance_mask,
+                                                             True)
         memory_cell = Variable(encoder_outputs.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
-        attended_utterance, _ = self._decoder_step.attend_on_utterance(hidden_state,
-                                                                       encoder_outputs,
-                                                                       utterance_mask)
 
-        # create rnn state, decoder state, decoder step, fire off trainer
-        # set initial state
-        initial_rnn_state = RnnState(hidden_state,
-                                     memory_cell,
-                                     None, # TODO do we need previous action embedding?
-                                     attended_utterance,
-                                     encoder_outputs,
-                                     utterance_mask)
-        initial_grammar_state = JavaGrammarState([], None) # insert first method decl nonterminal
-        initial_score = Variable(encoder_outputs.data.new(batch_size).fill_(0))
+        initial_score = Variable(embedded_utterance.data.new(batch_size).fill_(0))
 
-        nonterminals = [rules[batch_index][0]['left'] for batch_index in range(batch_size)]
-        initial_state = JavaDecoderState([],
-                                         initial_score,
-                                         initial_rnn_state,
-                                         initial_grammar_state,
-                                         nonterminals,
-                                         prev_rules=None,
-                                         nonterminal2parent_rule=None,
-                                         nonterminal2parent_state=None) # todo more args
+        action_embeddings, action_indices = self._embed_actions(actions)
 
-        # nonterminal_embedder: TextFieldEmbedder,
-        # nonterminal: torch.Tensor,
-        # prev_rule: torch.Tensor,
-        # nonterminal2parent_rule: Dict[torch.LongTensor, torch.LongTensor],
-        # nonterminal2parent_state: Dict[torch.LongTensor, torch.LongTensor]
+        # _, num_entities, num_question_tokens = linking_scores.size()
+        # flattened_linking_scores, actions_to_entities = self._map_entity_productions(linking_scores,
+        #                                                                              world,
+        #                                                                              actions)
+
+        # if target_action_sequences is not None:
+        #     # Remove the trailing dimension (from ListField[ListField[IndexField]]).
+        #     target_action_sequences = target_action_sequences.squeeze(-1)
+        #     target_mask = target_action_sequences != self._action_padding_index
+        # else:
+        #     target_mask = None
+
+        # To make grouping states together in the decoder easier, we convert the batch dimension in
+        # all of our tensors into an outer list.  For instance, the encoder outputs have shape
+        # `(batch_size, question_length, encoder_output_dim)`.  We need to convert this into a list
+        # of `batch_size` tensors, each of shape `(question_length, encoder_output_dim)`.  Then we
+        # won't have to do any index selects, or anything, we'll just do some `torch.cat()`s.
+        initial_score_list = [initial_score[i] for i in range(batch_size)]
+        encoder_output_list = [encoder_outputs[i] for i in range(batch_size)]
+        question_mask_list = [utterance_mask[i] for i in range(batch_size)]
+        initial_rnn_state = []
+        for i in range(batch_size):
+            initial_rnn_state.append(RnnState(final_encoder_output[i],
+                                              memory_cell[i],
+                                              self._first_action_embedding,
+                                              self._first_attended_question,
+                                              encoder_output_list,
+                                              question_mask_list))
+        initial_grammar_state = [self._create_grammar_state(actions[i])
+                                 for i in range(batch_size)]
+        initial_state = JavaDecoderState(batch_indices=list(range(batch_size)),
+                                               action_history=[[] for _ in range(batch_size)],
+                                               score=initial_score_list,
+                                               rnn_state=initial_rnn_state,
+                                               grammar_state=initial_grammar_state,
+                                               action_embeddings=action_embeddings,
+                                               action_indices=action_indices,
+                                               possible_actions=actions,
+                                               flattened_linking_scores=flattened_linking_scores,
+                                               actions_to_entities=actions_to_entities,
+                                               entity_types=entity_type_dict,
+                                               debug_info=None)
+
 
         if self.training:
-            # embedding for the rhs of gold sequences
-            rule_index = 0
-            allowed_actions = [rules[batch_index][rule_index]['right'] for batch_index in range(batch_size)]
-
-            state = initial_state
-            next_states = []
-            for next_state in self._decoder_step.take_step(state, allowed_actions=allowed_actions):
-                next_states.append(next_state)
-                state = next_state
-                rule_index += 1
-                allowed_actions = [rules[batch_index][rule_index]['right'] for batch_index in range(batch_size)]
-
-            loss = 0
-            scores = [s.score for s in next_states]
-            for scores in scores.values():  # we don't care about the batch index, just the scores
-                loss += -util.logsumexp(torch.cat(scores))
-            return {'loss': loss / len(scores)}
-
+            return self._decoder_trainer.decode(initial_state,
+                                                self._decoder_step,
+                                                rules,
+                                                action_map)
         else:
-            print('inference yo')
-            # fire beam search
+            outputs = {}
+            if rules is not None:
+                outputs['loss'] = self._decoder_trainer.decode(initial_state,
+                                             self._decoder_step,
+                                             rules)['loss']
+            # print("Decoding------------")
+            # print('nonterminal action indices', nonterminals_action_indices)
             num_steps = self._max_decoding_steps
-            # This tells the state to start keeping track of debug info, which we'll pass along in
-            # our output dictionary.
-
-            best_final_states = self._beam_search.search(num_steps,
-                                                         initial_state,
-                                                         self._decoder_step,
-                                                         keep_final_unfinished_states=False)
-
-
-
-        # Loss
-        ############################################################################
-        # todo find loss from the context list
-        return {"loss": 0.0}
+            best_final_states = self._decoder_beam_search.search(num_steps,
+                                                                 initial_state,
+                                                                 self._decoder_step,
+                                                                 keep_final_unfinished_states=False)
+            # print("BEST FINAL STATES", len(best_final_states))
+            outputs['rules'] = []
+            for i in range(batch_size):
+                if i in best_final_states:
+                    credit = 0
+                    if rules is not None:
+                        credit = self._action_history_match(best_final_states[i][0].action_history[0],
+                                                            rules[i])
+                    self._action_sequence_accuracy(credit)
+                    outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history[0])
+                # todo rajas remove else
+                # else:
+                #     credit = 0
+                #     if rules is not None:
+                #         credit = self._action_history_match(best_final_states[i].action_history[0],
+                #                                             rules[i])
+                #     self._action_sequence_accuracy(credit)
+                #     outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history[0])
+            return outputs
 
     @staticmethod
-    def _get_loss(logits: torch.LongTensor,
-                  targets: torch.LongTensor,
-                  target_mask: torch.LongTensor) -> torch.LongTensor:
-        """
-        Takes logits (unnormalized outputs from the decoder) of size (batch_size,
-        num_decoding_steps, num_classes), target indices of size (batch_size, num_decoding_steps+1)
-        and corresponding masks of size (batch_size, num_decoding_steps+1) steps and computes cross
-        entropy loss while taking the mask into account.
+    def _action_history_match(predicted: List[int], targets: torch.LongTensor) -> int:
+        # Check if target is big enough to cover prediction (including start/end symbols)
 
-        The length of ``targets`` is expected to be greater than that of ``logits`` because the
-        decoder does not need to compute the output corresponding to the last timestep of
-        ``targets``. This method aligns the inputs appropriately to compute the loss.
+        # print("Predicted", predicted)
+        # print("Target", targets)
+        # if len(predicted) > targets.size(0):
+        #     return 0
+        min_length = min(len(predicted), targets.size(0))
 
-        During training, we want the logit corresponding to timestep i to be similar to the target
-        token from timestep i + 1. That is, the targets should be shifted by one timestep for
-        appropriate comparison.  Consider a single example where the target has 3 words, and
-        padding is to 7 tokens.
-           The complete sequence would correspond to <S> w1  w2  w3  <E> <P> <P>
-           and the mask would be                     1   1   1   1   1   0   0
-           and let the logits be                     l1  l2  l3  l4  l5  l6
-        We actually need to compare:
-           the sequence           w1  w2  w3  <E> <P> <P>
-           with masks             1   1   1   1   0   0
-           against                l1  l2  l3  l4  l5  l6
-           (where the input was)  <S> w1  w2  w3  <E> <P>
-        """
-        relevant_targets = targets[:, 1:].contiguous()  # (batch_size, num_decoding_steps)
-        relevant_mask = target_mask[:, 1:].contiguous()  # (batch_size, num_decoding_steps)
-        loss = sequence_cross_entropy_with_logits(logits, relevant_targets, relevant_mask)
-        return loss
+        # todo(rajas) target is padded with 0's so you need to remove those firstly:
+        # todo change the padding to -1 as it's more clear
 
-    @overrides
-    def decode(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """
-        This method overrides ``Model.decode``, which gets called after ``Model.forward``, at test
-        time, to finalize predictions. The logic for the decoder part of the encoder-decoder lives
-        within the ``forward`` method.
+        # predicted_tensor = targets.data.new(predicted)
+        predicted_tensor = Variable(targets.data.new(predicted))
+        predicted_tensor = predicted_tensor[:min_length].long()
+        targets_trimmed = targets[:min_length].long()
+        # Return 1 if the predicted sequence is anywhere in the list of targets.
+        x = targets_trimmed.eq(predicted_tensor)
+        num_correct = torch.sum(x)
+        num_correct = num_correct.data.cpu().numpy().tolist()[0]
+        # print('numcorrect', num_correct)
+        return num_correct / min_length
 
-        This method trims the output predictions to the first end symbol, replaces indices with
-        corresponding tokens, and adds a field called ``predicted_tokens`` to the ``output_dict``.
+
+    def get_metrics(self, reset: bool = False) -> Dict[str, float]:
+        return {
+            'parse_acc': self._action_sequence_accuracy.get_metric(reset)
+        }
+        # return {metric_name: metric.get_metric(reset) for metric_name, metric in self.metrics.items()}
+
+    @staticmethod
+    def _create_grammar_state(possible_actions: List[ProductionRuleArray]) -> JavaGrammarState:
+        # valid_actions = world.get_valid_actions()
+        # action_mapping = {}
+        # for i, action in enumerate(possible_actions):
+        #     action_string = action[0]
+        #     action_mapping[action_string] = i
+        # translated_valid_actions = {}
+        # for key, action_strings in valid_actions.items():
+        #     translated_valid_actions[key] = [action_mapping[action_string]
+        #                                      for action_string in action_strings]
+        # return JavaGrammarState([START_SYMBOL], {}, translated_valid_actions, action_mapping)
+        nonterminal2action_index = defaultdict(list)
+        for i, action in enumerate(possible_actions):
+            lhs = action[0].split(' -> ')[0]
+            nonterminal2action_index[lhs].append(i)
+        return JavaGrammarState([START_SYMBOL], nonterminal2action_index)
+
+    def _embed_actions(self, actions: List[List[ProductionRuleArray]]) -> Tuple[torch.Tensor,
+                                                                                Dict[Tuple[int, int], int]]:
         """
-        predicted_indices = output_dict["predictions"]
-        if not isinstance(predicted_indices, numpy.ndarray):
-            predicted_indices = predicted_indices.data.cpu().numpy()
-        all_predicted_tokens = []
-        for indices in predicted_indices:
-            indices = list(indices)
-            # Collect indices till the first end_symbol
-            if self._end_index in indices:
-                indices = indices[:indices.index(self._end_index)]
-            predicted_tokens = [self.vocab.get_token_from_index(x, namespace="target_tokens")
-                                for x in indices]
-            all_predicted_tokens.append(predicted_tokens)
-        output_dict["predicted_tokens"] = all_predicted_tokens
-        return output_dict
+        Given all of the possible actions for all batch instances, produce an embedding for them.
+        There will be significant overlap in this list, as the production rules from the grammar
+        are shared across all batch instances.  Our returned tensor has an embedding for each
+        `unique` action, so we also need to return a mapping from the original ``(batch_index,
+        action_index)`` to our new ``global_action_index``, so that we can get the right action
+        embedding during decoding.
+
+        Returns
+        -------
+        action_embeddings : ``torch.Tensor``
+            Has shape ``(num_unique_actions, action_embedding_dim)``.
+        action_map : ``Dict[Tuple[int, int], int]``
+            Maps ``(batch_index, action_index)`` in the input action list to ``action_index`` in
+            the ``action_embeddings`` tensor.  All non-embeddable actions get mapped to `-1` here.
+        """
+        embedded_actions = self._action_embedder.weight
+
+        # Now we just need to make a map from `(batch_index, action_index)` to
+        # `global_action_index`.  global_action_ids has the list of all unique actions; here we're
+        # going over all of the actions for each batch instance so we can map them to the global
+        # action ids.
+        action_vocab = self.vocab.get_token_to_index_vocabulary(self._rule_namespace)
+        action_map: Dict[Tuple[int, int], int] = {}
+        for batch_index, instance_actions in enumerate(actions):
+            for action_index, action in enumerate(instance_actions):
+                if not action[0]:
+                    # This rule is padding.
+                    continue
+                global_action_id = action_vocab.get(action[0], -1)
+                action_map[(batch_index, action_index)] = global_action_id
+        return embedded_actions, action_map
+
 
     @classmethod
     def from_params(cls, vocab, params: Params) -> 'SimpleSeq2Seq':
-        source_embedder_params = params.pop("source_embedder")
-        source_embedder = TextFieldEmbedder.from_params(vocab, source_embedder_params)
+        utterance_embedder_params = params.pop("utterance_embedder")
+        utterance_embedder = TextFieldEmbedder.from_params(vocab, utterance_embedder_params)
         encoder = Seq2SeqEncoder.from_params(params.pop("encoder"))
         max_decoding_steps = params.pop("max_decoding_steps")
-        target_namespace = params.pop("target_namespace", "tokens")
+        action_embedding_dim = params.pop_int("action_embedding_dim")
+        decoder_beam_search = BeamSearch.from_params(params.pop("decoder_beam_search"))
 
-        nonterminal_embedder = TextFieldEmbedder.from_params(vocab, params.pop("nonterminal_embedder"))
-        terminal_embedder_params = params.pop('terminal_embedder', None)
-        if terminal_embedder_params:
-            terminal_embedder = TextFieldEmbedder.from_params(vocab, terminal_embedder_params)
-        else:
-            terminal_embedder = None
+        # nonterminal_embedder = TextFieldEmbedder.from_params(vocab, params.pop("nonterminal_embedder"))
+        # terminal_embedder_params = params.pop('terminal_embedder', None)
+        # if terminal_embedder_params:
+        #     terminal_embedder = TextFieldEmbedder.from_params(vocab, terminal_embedder_params)
+        # else:
+        #     terminal_embedder = None
         # If no attention function is specified, we should not use attention, not attention with
         # default similarity function.
         attention_function_type = params.pop("attention_function", None)
@@ -280,11 +317,11 @@ class JavaSemanticParser(Model):
         scheduled_sampling_ratio = params.pop_float("scheduled_sampling_ratio", 0.0)
         params.assert_empty(cls.__name__)
         return cls(vocab,
-                   source_embedder=source_embedder,
+                   utterance_embedder=utterance_embedder,
                    encoder=encoder,
-                   max_decoding_steps=max_decoding_steps,
-                   target_namespace=target_namespace,
                    attention_function=attention_function,
-                   scheduled_sampling_ratio=scheduled_sampling_ratio,
-                   nonterminal_embedder=nonterminal_embedder,
-                   terminal_embedder=terminal_embedder)
+                   # nonterminal_embedder=nonterminal_embedder,
+                   # terminal_embedder=terminal_embedder,
+                   action_embedding_dim=action_embedding_dim,
+                   max_decoding_steps=max_decoding_steps,
+                   decoder_beam_search=decoder_beam_search)
