@@ -111,9 +111,7 @@ class JavaSemanticParser(Model):
         utterance_mask = get_text_field_mask(utterance)
 
         # (batch_size, question_length, encoder_output_dim)
-        # todo(rajas): add the dropout back in
-        # encoder_outputs = self._dropout(self._encoder(embedded_utterance, utterance_mask))
-        encoder_outputs = self._encoder(embedded_utterance, utterance_mask)
+        encoder_outputs = self._dropout(self._encoder(embedded_utterance, utterance_mask))
 
         # This will be our initial hidden state and memory cell for the decoder LSTM.
         # todo(rajas) change back to encoder is bidirectional from True
@@ -123,7 +121,6 @@ class JavaSemanticParser(Model):
         memory_cell = Variable(encoder_outputs.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
 
         initial_score = Variable(embedded_utterance.data.new(batch_size).fill_(0))
-
         action_embeddings, action_indices = self._embed_actions(actions)
 
         # _, num_entities, num_question_tokens = linking_scores.size()
@@ -233,7 +230,7 @@ class JavaSemanticParser(Model):
         # return JavaGrammarState([START_SYMBOL], {}, translated_valid_actions, action_mapping)
         nonterminal2action_index = defaultdict(list)
         for i, action in enumerate(possible_actions):
-            lhs = action[0].split(' -> ')[0]
+            lhs = action[0].split('-->')[0]
             nonterminal2action_index[lhs].append(i)
         return JavaGrammarState([START_SYMBOL], nonterminal2action_index)
 
@@ -280,6 +277,7 @@ class JavaSemanticParser(Model):
         encoder = Seq2SeqEncoder.from_params(params.pop("encoder"))
         max_decoding_steps = params.pop("max_decoding_steps")
         action_embedding_dim = params.pop_int("action_embedding_dim")
+        dropout = params.pop_float('dropout', 0.0)
         decoder_beam_search = BeamSearch.from_params(params.pop("decoder_beam_search"))
 
         # nonterminal_embedder = TextFieldEmbedder.from_params(vocab, params.pop("nonterminal_embedder"))
@@ -295,14 +293,15 @@ class JavaSemanticParser(Model):
             attention_function = SimilarityFunction.from_params(attention_function_type)
         else:
             attention_function = None
-        scheduled_sampling_ratio = params.pop_float("scheduled_sampling_ratio", 0.0)
         params.assert_empty(cls.__name__)
         return cls(vocab,
                    utterance_embedder=utterance_embedder,
                    encoder=encoder,
                    attention_function=attention_function,
+
                    # nonterminal_embedder=nonterminal_embedder,
                    # terminal_embedder=terminal_embedder,
                    action_embedding_dim=action_embedding_dim,
                    max_decoding_steps=max_decoding_steps,
-                   decoder_beam_search=decoder_beam_search)
+                   decoder_beam_search=decoder_beam_search,
+                   dropout=dropout)

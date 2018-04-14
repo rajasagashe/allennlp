@@ -35,5 +35,5 @@ Registrable._registry[LearningRateScheduler] = {   # pylint: disable=protected-a
         "multi_step": torch.optim.lr_scheduler.MultiStepLR,
         "exponential": torch.optim.lr_scheduler.ExponentialLR,
         "reduce_on_plateau": torch.optim.lr_scheduler.ReduceLROnPlateau,
-        "cosine": torch.optim.lr_scheduler.CosineAnnealingLR,
+        # "cosine": torch.optim.lr_scheduler.CosineAnnealingLR,
 }

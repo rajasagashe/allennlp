@@ -1,6 +1,7 @@
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
 
+import time
 from overrides import overrides
 
 import torch
@@ -115,7 +116,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
         # action_embeddings: (group_size, num_embedded_actions, action_embedding_dim)
         # action_mask: (group_size, num_embedded_actions)
+        start = time.time()
         action_embeddings, embedded_action_mask = self._get_action_embeddings(state, actions_to_embed)
+        end = time.time() - start
+        # print("Time to get action embeddings", end)
         # We'll do a batch dot product here with `bmm`.  We want `dot(predicted_action_embedding,
         # action_embedding)` for each `action_embedding`, and we can get that efficiently with
         # `bmm` and some squeezing.
@@ -155,7 +159,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             action_mask = embedded_action_mask.float()
             log_probs = util.masked_log_softmax(action_logits, action_mask)
 
-        return self._compute_new_states(state,
+        start = time.time()
+        x = self._compute_new_states(state,
                                         log_probs,
                                         hidden_state,
                                         memory_cell,
@@ -165,6 +170,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                         considered_actions,
                                         allowed_actions,
                                         max_actions)
+        end = time.time() - start
+        # print("Time to compute new states", end)
+
+        return x
 
     def attend_on_question(self,
                            query: torch.Tensor,
@@ -314,6 +323,14 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         group_size = len(state.batch_indices)
         action_embedding_dim = state.action_embeddings.size(-1)
         flattened_actions = action_tensor.view(-1)
+        # print('---------')
+        # print('action_tensor', action_tensor.size())
+        # print('flattened_actions', flattened_actions.size())
+        # print('action embeddings', state.action_embeddings.size())
+        # print('max flattened actions', torch.max(flattened_actions))
+        # print('num_actions', num_actions)
+        # print('max_num_actions', max_num_actions)
+        # print()
         flattened_action_embeddings = state.action_embeddings.index_select(0, flattened_actions)
         action_embeddings = flattened_action_embeddings.view(group_size, max_num_actions, action_embedding_dim)
         sequence_lengths = Variable(action_embeddings.data.new(num_actions))
@@ -494,6 +511,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 else:
                     new_debug_info = None
 
+                # todo(rajas): there's only one type of prev staet if rule was identifier
                 new_rnn_state = RnnState(hidden_state[group_index],
                                          memory_cell[group_index],
                                          action_embedding,

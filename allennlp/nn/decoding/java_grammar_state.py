@@ -27,12 +27,10 @@ class JavaGrammarState:
         """
         Returns a list of valid actions as integers.
         """
-        # print('in get valid actions')
-        # print(self._nonterminal_stack)
         return self._valid_actions[self._nonterminal_stack[-1]]
 
     def take_action(self, rule: str) -> 'GrammarState':
-        left_side, right_side = rule.split(' -> ')
+        left_side, right_side = rule.split('-->')
 
         assert self._nonterminal_stack[-1] == left_side, (f"Tried to expand {self._nonterminal_stack[-1]}"
                                                           "but got rule f{left_side}->f{right_side}")
