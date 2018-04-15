@@ -142,11 +142,14 @@ class JavaDatasetReader(DatasetReader):
         # code_field = TextField([Token(t) for t in code], self._utterance_indexers)
         code_field = MetadataField({'code':code})
 
+
+        # todo(rajas) generate the local actions from identifierNT to method or variable name
+        # use the sriniclass and srinifunc notation
+
         # todo(rajas) remove unks when the environment copying added
         rule_indexes = []
         for rule in rules:
             if rule in rule2index:
-
                 rule_indexes.append(rule2index[rule])
             else:
                 lhs, rhs = rule.split('-->')
@@ -160,9 +163,8 @@ class JavaDatasetReader(DatasetReader):
                   "variable_types": variable_types_field,
                   "method_names": method_name_fields,
                   "method_return_types": method_return_types_field,
-
                   "rules": rule_field,
-                  "actions": global_rule_field,
+                  "actions": global_rule_field,  # todo(rajas) add the local actions here
                   "code": code_field,}
 
         return Instance(fields)
