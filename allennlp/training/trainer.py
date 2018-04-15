@@ -666,6 +666,14 @@ class Trainer:
             train_metrics = self._train_epoch(epoch)
 
             if self._validation_data is not None:
+                # todo(rajas): remove this eventually
+                f = open('debug/pred_target_strings.csv', 'w+')
+                f.write('Target, Predicted\n')
+                f.close()
+                codef = open('debug/pred_target_code.txt', 'w+')
+                codef.write('Targ and Predicted Code\n')
+                codef.close()
+
                 # We have a validation set, so compute all the metrics on it.
                 val_loss, num_batches = self._validation_loss()
                 val_metrics = self._get_metrics(val_loss, num_batches, reset=True)

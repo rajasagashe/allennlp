@@ -1,5 +1,8 @@
+import json
 from collections import defaultdict
 from typing import Dict, Tuple, List, Set, Any
+
+import re
 
 from allennlp.training.metrics import Average
 from overrides import overrides
@@ -7,6 +10,7 @@ from overrides import overrides
 import torch
 from torch.autograd import Variable
 from torch.nn.modules.rnn import LSTMCell
+from nltk.translate.bleu_score import sentence_bleu
 
 from allennlp.common import Params
 from allennlp.data.vocabulary import Vocabulary
@@ -69,6 +73,7 @@ class JavaSemanticParser(Model):
         #                                      nonterminal_embedder=nonterminal_embedder)
         self._decoder_trainer = MaximumLikelihood()
         self._action_sequence_accuracy = Average()
+        self._code_bleu = Average()
 
         if dropout > 0:
             self._dropout = torch.nn.Dropout(p=dropout)
@@ -92,6 +97,14 @@ class JavaSemanticParser(Model):
                                                    attention_function=attention_function,
                                                    dropout=dropout)
 
+        f = open('debug/pred_target_strings.csv', 'w+')
+        f.write('Target, Predicted\n')
+        f.close()
+
+        codef = open('debug/pred_target_code.txt', 'w+')
+        codef.write('Targ and Predicted Code\n')
+        codef.close()
+
     @overrides
     def forward(self,  # type: ignore
                 utterance: Dict[str, torch.LongTensor],
@@ -100,7 +113,8 @@ class JavaSemanticParser(Model):
                 method_names: Dict[str, torch.LongTensor],
                 method_return_types: Dict[str, torch.LongTensor],
                 actions: List[List[ProductionRuleArray]],
-                rules: List[torch.Tensor]) -> Dict[str, torch.Tensor]:
+                rules: List[torch.Tensor],
+                code: List[Dict[str, str]]) -> Dict[str, torch.Tensor]:
 
         # Encode summary, variables, methods with bi lstm.
         ##################################################
@@ -120,6 +134,9 @@ class JavaSemanticParser(Model):
                                                              True)
         memory_cell = Variable(encoder_outputs.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
 
+        # print("utterance weigth", self._utterance_embedder._token_embedders)
+        # print("utterance weigth", self._utterance_embedder._token_embedders['tokens'].weight.size())
+        # exit()
         initial_score = Variable(embedded_utterance.data.new(batch_size).fill_(0))
         action_embeddings, action_indices = self._embed_actions(actions)
 
@@ -184,21 +201,38 @@ class JavaSemanticParser(Model):
                                                                  keep_final_unfinished_states=False)
             # print("BEST FINAL STATES", len(best_final_states))
             outputs['rules'] = []
+
             for i in range(batch_size):
                 if i in best_final_states:
                     credit = 0
+                    bleu = 0
                     if rules is not None:
-                        credit = self._action_history_match(best_final_states[i][0].action_history[0],
-                                                            rules[i])
+                        credit = self._average_action_history_match(best_final_states[i][0].action_history[0], rules[i])
+                        targ_rules, pred_rules = self._get_rules_from_action_history(rules[i].long().data.cpu().numpy().tolist(), best_final_states[i][0].action_history[0],
+                                                            actions[i])
+                        bleu = self._get_bleu(code[i], self._gen_code_from_rules(pred_rules))
+                        self._log_code(code[i], targ_rules, pred_rules, i)
+
                     self._action_sequence_accuracy(credit)
+                    self._code_bleu(bleu)
                     outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history[0])
 
             return outputs
+    @staticmethod
+    def _get_bleu(gold_seq, pred_seq):
+        return sentence_bleu(gold_seq, pred_seq)
 
     @staticmethod
-    def _action_history_match(predicted: List[int], targets: torch.LongTensor) -> int:
-        min_length = min(len(predicted), targets.size(0))
-        max_length = max(len(predicted), targets.size(0))
+    def _average_action_history_match(predicted: List[int], targets: torch.LongTensor) -> int:
+        # Since targets is padded with -1's we find the target's length by the first index
+        # where the -1's start to occur.
+        min_val, unpadded_targ_length = torch.min(targets, 0)
+        if min_val.data.cpu().numpy().tolist()[0] == -1:
+            unpadded_targ_length = unpadded_targ_length.data.cpu().numpy().tolist()[0]
+        else:
+            unpadded_targ_length = targets.size(0)
+        min_length = min(len(predicted), unpadded_targ_length)
+        max_length = max(len(predicted), unpadded_targ_length)
 
         predicted_tensor = Variable(targets.data.new(predicted))
         predicted_tensor = predicted_tensor[:min_length].long()
@@ -210,9 +244,66 @@ class JavaSemanticParser(Model):
         return num_correct / max_length
 
 
+    def _is_terminal_rule(self, rule):
+        return (
+               "IdentifierNT-->" in rule and rule != 'IdentifierNT-->VarCopy' and rule != 'IdentifierNT-->MethodCopy') \
+               or re.match(r"^Nt_.*_literal-->.*", rule) \
+               or rule == "<unk>"
+
+    def _gen_code_from_rules(self, rules):
+        stack = []
+        code = []
+        for i in range(0, len(rules)):
+            _, rhs = rules[i].split('-->')
+            if not self._is_terminal_rule(rules[i]):
+                stack.extend(rhs.split('___')[::-1])
+            else:
+                code.append(rhs)
+            try:
+                top = stack.pop()
+                while not top[0].isupper():
+                    code.append(top)
+                    if len(stack) == 0:
+                        break
+                    top = stack.pop()
+            except:
+                pass
+        return code
+
+    def _get_rules_from_action_history(self, target_actions:List[int], predicted_actions: List[int], actions: List[ProductionRuleArray]):
+        predicted_rules = []
+        target_rules = []
+        for a in target_actions:
+            target_rules.append(actions[a][0])
+        for a in predicted_actions:
+            predicted_rules.append(actions[a][0])
+        return target_rules, predicted_rules
+
+    def _log_rules(self, target_rules, predicted_rules, batch):
+        f = open('debug/pred_target_strings.csv', 'a')
+        f.write("batch, " + str(batch) + '\n')
+        for i in range(min(len(target_rules), len(predicted_rules))):  #todo(rajas) handle bounds
+            f.write(target_rules[i] + ", " + predicted_rules[i] + '\n')
+        f.close()
+
+    def _log_code(self, real_target_code, target_rules, predicted_rules, batch):
+        codef = open('debug/pred_target_code.txt', 'a')
+        codef.write("batch, " + str(batch) + '\n')
+
+        predicted_code = self._gen_code_from_rules(predicted_rules)
+        target_code = self._gen_code_from_rules(target_rules)
+        codef.write('Unprocessed Target\n')
+        codef.write(' '.join(real_target_code['code']) + '\n')
+        # codef.write('Target\n')
+        # codef.write(' '.join(target_code) + '\n')
+        codef.write('Prediction\n')
+        codef.write(' '.join(predicted_code) + '\n\n')
+        codef.close()
+
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         return {
-            'parse_acc': self._action_sequence_accuracy.get_metric(reset)
+            'parse_acc': self._action_sequence_accuracy.get_metric(reset),
+            'bleu': self._code_bleu.get_metric(reset)
         }
         # todo(rajas) add blue score
 

@@ -10,7 +10,7 @@ from overrides import overrides
 from allennlp.common.file_utils import cached_path
 from allennlp.common import Params
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
-from allennlp.data.fields import ProductionRuleField
+from allennlp.data.fields import ProductionRuleField, MetadataField
 from allennlp.data.fields import Field, ListField, ArrayField
 from allennlp.data.fields import TextField
 from allennlp.data.instance import Instance
@@ -140,6 +140,7 @@ class JavaDatasetReader(DatasetReader):
         utterance = [t for word in utterance for t in self.split_camel_case(word)]
         utterance_field = TextField([Token(t) for t in utterance], self._utterance_indexers)
         # code_field = TextField([Token(t) for t in code], self._utterance_indexers)
+        code_field = MetadataField({'code':code})
 
         # todo(rajas) remove unks when the environment copying added
         rule_indexes = []
@@ -159,9 +160,10 @@ class JavaDatasetReader(DatasetReader):
                   "variable_types": variable_types_field,
                   "method_names": method_name_fields,
                   "method_return_types": method_return_types_field,
-                  # "code": code_field,
+
                   "rules": rule_field,
-                  "actions": global_rule_field}
+                  "actions": global_rule_field,
+                  "code": code_field,}
 
         return Instance(fields)
 
