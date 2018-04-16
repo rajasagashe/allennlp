@@ -62,16 +62,17 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
         # it's not actually a tensor, because different batch instance might have different numbers
         # of finished states.
 
-        # for state in next_states:
-        #     print("lalala")
-        #     print(state.grammar_state.generated_rules)
-        # print(actions_taken)
+        # loss = 0
+        # for state in finished_states:
+        #     if len(state.score) > 1:
+        #         exit()
+        #     loss += -state.score[0] / len(state.action_history)
 
         batch_scores = self._group_scores_by_batch(finished_states)
         loss = 0
-        for scores in batch_scores.values():  # we don't care about the batch index, just the scores
-            loss += -torch.cat(scores)
-        return {'loss': loss / len(batch_scores)}
+        for score in batch_scores.values():  # we don't care about the batch index, just the scores
+            loss += -score
+        return {'loss': loss / len(finished_states)}
 
     @staticmethod
     def _get_allowed_actions(state: DecoderState, step_num: int, batch_rules):
