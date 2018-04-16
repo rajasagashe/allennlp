@@ -48,7 +48,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # Our decoder input will be the concatenation of the decoder hidden state and the previous
         # action embedding, and we'll project that down to the decoder's `input_dim`, which we
         # arbitrarily set to be the same as `output_dim`.
-        self._input_projection_layer = Linear(output_dim + action_embedding_dim, input_dim)
+        self._input_projection_layer = Linear(output_dim + 2 * action_embedding_dim, input_dim)
         # Before making a prediction, we'll compute an attention over the input given our updated
         # hidden state.  Then we concatenate that with the decoder state and project to
         # `action_embedding_dim` to make a prediction.
@@ -57,7 +57,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # TODO(pradeep): Do not hardcode decoder cell type.
         self._decoder_cell = LSTMCell(input_dim, output_dim)
 
-        # todo(rajas): add the mixture feedforward back in
+        # todo(rajas): add the mixture feedforward back in once linking implemented
         # if mixture_feedforward is not None:
         #     check_dimensions_match(output_dim, mixture_feedforward.get_input_dim(),
         #                            "hidden state embedding dim", "mixture feedforward input dim")
@@ -86,10 +86,16 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         memory_cell = torch.stack([rnn_state.memory_cell for rnn_state in state.rnn_state])
         previous_action_embedding = torch.stack([rnn_state.previous_action_embedding
                                                  for rnn_state in state.rnn_state])
+        # The parent is the top most element on the parent_states stack.
+        parent_action_embedding = torch.stack([rnn_state.parent_states[-1]
+                                               for rnn_state in state.rnn_state])
+
+        # todo(rajas): get the current non terminal embedding if accuracy suffers
 
         # (group_size, decoder_input_dim)
         decoder_input = self._input_projection_layer(torch.cat([attended_question,
-                                                                previous_action_embedding], -1))
+                                                                previous_action_embedding,
+                                                                parent_action_embedding], -1))
 
         hidden_state, memory_cell = self._decoder_cell(decoder_input, (hidden_state, memory_cell))
         hidden_state = self._dropout(hidden_state)
@@ -501,6 +507,14 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 action_embedding = action_embeddings[group_index, action_embedding_index, :]
                 production_rule = state.possible_actions[batch_index][action][0]
                 new_grammar_state = state.grammar_state[group_index].take_action(production_rule)
+
+                # Pop the old parent states and push the new ones one num nonterminals times since
+                # each of the nonterminals will use it.
+                new_parent_states = [p for p in state.rnn_state[group_index].parent_states]
+                new_parent_states.pop()
+                num_nonterminals_in_rhs = new_grammar_state.number_nonterminals_in_rhs(production_rule)
+                new_parent_states = new_parent_states + ([action_embedding] * num_nonterminals_in_rhs)
+
                 if state.debug_info is not None:
                     debug_info = {
                             'considered_actions': considered_actions[group_index],
@@ -511,13 +525,15 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 else:
                     new_debug_info = None
 
-                # todo(rajas): there's only one type of prev staet if rule was identifier
+                # todo(rajas): create a single identifier state-embedding if rule was identifier
+                # todo added to the dataset reader?
                 new_rnn_state = RnnState(hidden_state[group_index],
                                          memory_cell[group_index],
                                          action_embedding,
                                          attended_question[group_index],
                                          state.rnn_state[group_index].encoder_outputs,
-                                         state.rnn_state[group_index].encoder_output_mask)
+                                         state.rnn_state[group_index].encoder_output_mask,
+                                         new_parent_states)
 
                 new_state = JavaDecoderState(batch_indices=[batch_index],
                                                    action_history=[new_action_history],

@@ -23,6 +23,11 @@ class JavaGrammarState:
         return len(self._nonterminal_stack) == 0
         # return not self._nonterminal_stack
 
+    def number_nonterminals_in_rhs(self, production_rule: str):
+        _, rhs = production_rule.split('-->')
+        rhs_elements = rhs.split('___')
+        return sum((element in self._valid_actions.keys()) for element in rhs_elements)
+
     def get_valid_actions(self) -> List[int]:
         """
         Returns a list of valid actions as integers.

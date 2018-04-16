@@ -167,7 +167,8 @@ class JavaSemanticParser(Model):
                                               self._first_action_embedding,
                                               self._first_attended_question,
                                               encoder_output_list,
-                                              question_mask_list))
+                                              question_mask_list,
+                                              parent_states=[self._first_action_embedding]))
         initial_grammar_state = [self._create_grammar_state(actions[i])
                                  for i in range(batch_size)]
         initial_state = JavaDecoderState(batch_indices=list(range(batch_size)),
