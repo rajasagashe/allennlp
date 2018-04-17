@@ -22,6 +22,8 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                  action_embeddings: torch.Tensor,
                  action_indices: Dict[Tuple[int, int], int],
                  possible_actions: List[List[ProductionRuleArray]],
+                 flattened_linking_scores: torch.FloatTensor,
+                 actions_to_entities: Dict[Tuple[int, int], int],
                  debug_info: List = None
                  # prev_rules: List[torch.Tensor],
                  # nonterminal2parent_rules: List[Dict[str, torch.LongTensor]],
@@ -33,6 +35,8 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         self.action_embeddings = action_embeddings
         self.action_indices = action_indices
         self.possible_actions = possible_actions
+        self.flattened_linking_scores = flattened_linking_scores
+        self.actions_to_entities = actions_to_entities
         self.debug_info = debug_info
         # self.nonterminal_action_indices = nonterminal_action_indices
         # self.prev_rules = prev_rules
@@ -77,6 +81,8 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                                 action_indices=states[0].action_indices,
                                 grammar_state=grammar_states,
                                 possible_actions=states[0].possible_actions,
+                                flattened_linking_scores=states[0].flattened_linking_scores,
+                                actions_to_entities=states[0].actions_to_entities,
                                 debug_info=debug_info
                                 # nonterminals=nonterminals,
                                 # nonterminal_action_indices=nonterminal_action_indices,

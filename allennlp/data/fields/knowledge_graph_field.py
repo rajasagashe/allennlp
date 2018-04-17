@@ -320,7 +320,10 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
                        token: Token,
                        token_index: int,
                        tokens: List[Token]) -> float:
-        edit_distance = float(editdistance.eval(' '.join(e.text for e in entity_text), token.text))
+        # edit_distance = float(editdistance.eval(' '.join(e.text for e in entity_text), token.text))
+        # We take the first element since that has the full entity string.
+        # The rest of the elements are camel split parts.
+        edit_distance = float(editdistance.eval(entity_text[0].text, token.text))
         return 1.0 - edit_distance / len(token.text)
 
     def _related_column(self,

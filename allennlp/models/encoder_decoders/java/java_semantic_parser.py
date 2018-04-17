@@ -14,7 +14,7 @@ from nltk.translate.bleu_score import sentence_bleu
 
 from allennlp.common import Params
 from allennlp.data.vocabulary import Vocabulary
-from allennlp.modules import Attention, TextFieldEmbedder, Seq2SeqEncoder
+from allennlp.modules import Attention, TextFieldEmbedder, Seq2SeqEncoder, FeedForward
 from allennlp.modules.token_embedders import Embedding
 from allennlp.modules.similarity_functions import SimilarityFunction
 from allennlp.models.model import Model
@@ -44,6 +44,7 @@ class JavaSemanticParser(Model):
                  vocab: Vocabulary,
                  utterance_embedder: TextFieldEmbedder,
                  encoder: Seq2SeqEncoder,
+                 mixture_feedforward: FeedForward,
                  # nonterminal_embedder: TextFieldEmbedder,
                  max_decoding_steps: int,
                  decoder_beam_search: BeamSearch,
@@ -89,13 +90,18 @@ class JavaSemanticParser(Model):
         # previous action, or a previous question attention.
         self._first_action_embedding = torch.nn.Parameter(torch.FloatTensor(action_embedding_dim))
         self._first_attended_question = torch.nn.Parameter(torch.FloatTensor(encoder.get_output_dim()))
-        torch.nn.init.normal(self._first_action_embedding)
-        torch.nn.init.normal(self._first_attended_question)
+        # torch.nn.init.normal(self._first_action_embedding)
+        # torch.nn.init.normal(self._first_attended_question)
+        torch.nn.init.constant(self._first_action_embedding, 0.0)
+        torch.nn.init.constant(self._first_attended_question, 0.0)
+
+        self._linking_params = torch.nn.Linear(num_linking_features, 1)
 
         self._decoder_step = JavaDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
-                                                   action_embedding_dim=action_embedding_dim,
-                                                   attention_function=attention_function,
-                                                   dropout=dropout)
+                                             mixture_feedforward=mixture_feedforward,
+                                             action_embedding_dim=action_embedding_dim,
+                                             attention_function=attention_function,
+                                             dropout=dropout)
 
         f = open('debug/pred_target_strings.csv', 'w+')
         f.write('Target, Predicted\n')
@@ -108,13 +114,15 @@ class JavaSemanticParser(Model):
     @overrides
     def forward(self,  # type: ignore
                 utterance: Dict[str, torch.LongTensor],
-                variable_names: Dict[str, torch.LongTensor],
-                variable_types: Dict[str, torch.LongTensor],
-                method_names: Dict[str, torch.LongTensor],
-                method_return_types: Dict[str, torch.LongTensor],
+                # variable_names: Dict[str, torch.LongTensor],
+                # variable_types: Dict[str, torch.LongTensor],
+                # method_names: Dict[str, torch.LongTensor],
+                # method_return_types: Dict[str, torch.LongTensor],
                 actions: List[List[ProductionRuleArray]],
                 rules: List[torch.Tensor],
-                code: List[Dict[str, str]]) -> Dict[str, torch.Tensor]:
+                code: List[Dict[str, str]],
+                java_class: Dict[str, torch.LongTensor],
+                entities: List[Set[str]]) -> Dict[str, torch.Tensor]:
 
         # Encode summary, variables, methods with bi lstm.
         ##################################################
@@ -140,10 +148,12 @@ class JavaSemanticParser(Model):
         initial_score = Variable(embedded_utterance.data.new(batch_size).fill_(0))
         action_embeddings, action_indices = self._embed_actions(actions)
 
-        # _, num_entities, num_question_tokens = linking_scores.size()
-        # flattened_linking_scores, actions_to_entities = self._map_entity_productions(linking_scores,
-        #                                                                              world,
-        #                                                                              actions)
+        linking_features = java_class['linking']
+        linking_scores = self._linking_params(linking_features).squeeze(3)
+
+        flattened_linking_scores, actions_to_entities = self._map_entity_productions(linking_scores,
+                                                                                     entities,
+                                                                                     actions)
 
         # if target_action_sequences is not None:
         #     # Remove the trailing dimension (from ListField[ListField[IndexField]]).
@@ -172,17 +182,17 @@ class JavaSemanticParser(Model):
         initial_grammar_state = [self._create_grammar_state(actions[i])
                                  for i in range(batch_size)]
         initial_state = JavaDecoderState(batch_indices=list(range(batch_size)),
-                                               action_history=[[] for _ in range(batch_size)],
-                                               score=initial_score_list,
-                                               rnn_state=initial_rnn_state,
-                                               grammar_state=initial_grammar_state,
-                                               action_embeddings=action_embeddings,
-                                               action_indices=action_indices,
-                                               possible_actions=actions,
-                                               # flattened_linking_scores=flattened_linking_scores,
-                                               # actions_to_entities=actions_to_entities,
-                                               # entity_types=entity_type_dict,
-                                               debug_info=None)
+                                         action_history=[[] for _ in range(batch_size)],
+                                         score=initial_score_list,
+                                         rnn_state=initial_rnn_state,
+                                         grammar_state=initial_grammar_state,
+                                         action_embeddings=action_embeddings,
+                                         action_indices=action_indices,
+                                         possible_actions=actions,
+                                         flattened_linking_scores=flattened_linking_scores,
+                                         actions_to_entities=actions_to_entities,
+                                         # entity_types=entity_type_dict,
+                                         debug_info=None)
 
 
         if self.training:
@@ -213,6 +223,7 @@ class JavaSemanticParser(Model):
                                                             actions[i])
                         bleu = self._get_bleu(code[i], self._gen_code_from_rules(pred_rules))
                         self._log_code(code[i], targ_rules, pred_rules, i)
+                        self._log_rules(targ_rules, pred_rules, i)
 
                     self._action_sequence_accuracy(credit)
                     self._code_bleu(bleu)
@@ -292,21 +303,22 @@ class JavaSemanticParser(Model):
         codef.write("batch, " + str(batch) + '\n')
 
         predicted_code = self._gen_code_from_rules(predicted_rules)
-        target_code = self._gen_code_from_rules(target_rules)
-        codef.write('Unprocessed Target\n')
-        codef.write(' '.join(real_target_code['code']) + '\n')
         # codef.write('Target\n')
-        # codef.write(' '.join(target_code) + '\n')
-        codef.write('Prediction\n')
-        codef.write(' '.join(predicted_code) + '\n\n')
-        codef.close()
+        # codef.write(' '.join(real_target_code['code']) + '\n')
+        # codef.write('Prediction\n')
+        # codef.write(' '.join(predicted_code) + '\n\n')
+        # codef.close()
+        print('==============' * 4)
+        print('Prediction====')
+        print(' '.join(predicted_code) + '')
+        print('Target========')
+        print(' '.join(real_target_code['code']) + '')
 
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         return {
             'parse_acc': self._action_sequence_accuracy.get_metric(reset),
             'bleu': self._code_bleu.get_metric(reset)
         }
-        # todo(rajas) add blue score
 
     @staticmethod
     def _create_grammar_state(possible_actions: List[ProductionRuleArray]) -> JavaGrammarState:
@@ -361,6 +373,67 @@ class JavaSemanticParser(Model):
                 action_map[(batch_index, action_index)] = global_action_id
         return embedded_actions, action_map
 
+    @staticmethod
+    def _map_entity_productions(linking_scores: torch.FloatTensor,
+                                batch_entities: List[Set[str]],
+                                actions: List[List[ProductionRuleArray]]) -> Tuple[torch.Tensor,
+                                                                                   Dict[Tuple[int, int], int]]:
+        """
+        Constructs a map from ``(batch_index, action_index)`` to ``(batch_index * entity_index)``.
+        That is, some actions correspond to terminal productions of entities from our table.  We
+        need to find those actions and map them to their corresponding entity indices, where the
+        entity index is its position in the list of entities returned by the ``world``.  This list
+        is what defines the second dimension of the ``linking_scores`` tensor, so we can use this
+        index to look up linking scores for each action in that tensor.
+
+        For easier processing later, the mapping that we return is `flattened` - we really want to
+        map ``(batch_index, action_index)`` to ``(batch_index, entity_index)``, but we are going to
+        have to use the result of this mapping to do ``index_selects`` on the ``linking_scores``
+        tensor.  You can't do ``index_select`` with tuples, so we flatten ``linking_scores`` to
+        have shape ``(batch_size * num_entities, num_question_tokens)``, and return shifted indices
+        into this flattened tensor.
+
+        Parameters
+        ----------
+        linking_scores : ``torch.Tensor``
+            A tensor representing linking scores between each table entity and each question token.
+            Has shape ``(batch_size, num_entities, num_question_tokens)``.
+        worlds : ``List[WikiTablesWorld]``
+            The ``World`` for each batch instance.  The ``World`` contains a reference to the
+            ``TableKnowledgeGraph`` that defines the set of entities in the linking.
+        actions : ``List[List[ProductionRuleArray]]``
+            The list of possible actions for each batch instance.  Our action indices are defined
+            in terms of this list, so we'll find entity productions in this list and map them to
+            entity indices from the entity list we get from the ``World``.
+
+        Returns
+        -------
+        flattened_linking_scores : ``torch.Tensor``
+            A flattened version of ``linking_scores``, with shape ``(batch_size * num_entities,
+            num_question_tokens)``.
+        actions_to_entities : ``Dict[Tuple[int, int], int]``
+            A mapping from ``(batch_index, action_index)`` to ``(batch_size * num_entities)``,
+            representing which action indices correspond to which entity indices in the returned
+            ``flattened_linking_scores`` tensor.
+        """
+        batch_size, num_entities, num_question_tokens = linking_scores.size()
+        entity_map: Dict[Tuple[int, str], int] = {}
+        for batch_index, entities in enumerate(batch_entities):
+            for entity_index, entity in enumerate(entities):
+                entity_map[(batch_index, entity)] = batch_index * num_entities + entity_index
+        actions_to_entities: Dict[Tuple[int, int], int] = {}
+        for batch_index, action_list in enumerate(actions):
+            for action_index, action in enumerate(action_list):
+                if not action[0]:
+                    # This action is padding.
+                    continue
+                _, production = action[0].split('-->')
+                entity_index = entity_map.get((batch_index, production), None)
+                if entity_index is not None:
+                    actions_to_entities[(batch_index, action_index)] = entity_index
+        flattened_linking_scores = linking_scores.view(batch_size * num_entities, num_question_tokens)
+        return flattened_linking_scores, actions_to_entities
+
 
     @classmethod
     def from_params(cls, vocab, params: Params) -> 'SimpleSeq2Seq':
@@ -370,8 +443,13 @@ class JavaSemanticParser(Model):
         max_decoding_steps = params.pop("max_decoding_steps")
         action_embedding_dim = params.pop_int("action_embedding_dim")
         dropout = params.pop_float('dropout', 0.0)
+        num_linking_features = params.pop_int('num_linking_features', 8)
         decoder_beam_search = BeamSearch.from_params(params.pop("decoder_beam_search"))
-
+        mixture_feedforward_type = params.pop('mixture_feedforward', None)
+        if mixture_feedforward_type is not None:
+            mixture_feedforward = FeedForward.from_params(mixture_feedforward_type)
+        else:
+            mixture_feedforward = None
         # nonterminal_embedder = TextFieldEmbedder.from_params(vocab, params.pop("nonterminal_embedder"))
         # terminal_embedder_params = params.pop('terminal_embedder', None)
         # if terminal_embedder_params:
@@ -390,10 +468,11 @@ class JavaSemanticParser(Model):
                    utterance_embedder=utterance_embedder,
                    encoder=encoder,
                    attention_function=attention_function,
-
+                   mixture_feedforward=mixture_feedforward,
                    # nonterminal_embedder=nonterminal_embedder,
                    # terminal_embedder=terminal_embedder,
                    action_embedding_dim=action_embedding_dim,
                    max_decoding_steps=max_decoding_steps,
                    decoder_beam_search=decoder_beam_search,
+                   num_linking_features=num_linking_features,
                    dropout=dropout)

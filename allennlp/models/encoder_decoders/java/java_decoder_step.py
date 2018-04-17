@@ -11,7 +11,7 @@ from torch.nn.modules.linear import Linear
 
 from allennlp.common import util as common_util
 from allennlp.nn import util
-from allennlp.modules import Attention, FeedForward
+from allennlp.modules import Attention, FeedForward, Embedding
 from allennlp.modules.similarity_functions import SimilarityFunction
 from allennlp.common.checks import check_dimensions_match
 
@@ -31,13 +31,17 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                  encoder_output_dim: int,
                  action_embedding_dim: int,
                  attention_function: SimilarityFunction,
-
+                 mixture_feedforward: FeedForward = None,
+                 num_entity_types: int = 1,
                  dropout: float = 0.0) -> None:
         super(JavaDecoderStep, self).__init__()
-        # self._mixture_feedforward = mixture_feedforward
+        self._mixture_feedforward = mixture_feedforward
+
         # self._entity_type_embedding = Embedding(num_entity_types, action_embedding_dim)
         self._input_attention = Attention(attention_function)
 
+        self._identifier_literal_action_embedding = torch.nn.Parameter(torch.FloatTensor(action_embedding_dim))
+        torch.nn.init.normal(self._identifier_literal_action_embedding)
         # self._num_start_types = num_start_types
         # self._start_type_predictor = Linear(encoder_output_dim, num_start_types)
 
@@ -57,12 +61,11 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # TODO(pradeep): Do not hardcode decoder cell type.
         self._decoder_cell = LSTMCell(input_dim, output_dim)
 
-        # todo(rajas): add the mixture feedforward back in once linking implemented
-        # if mixture_feedforward is not None:
-        #     check_dimensions_match(output_dim, mixture_feedforward.get_input_dim(),
-        #                            "hidden state embedding dim", "mixture feedforward input dim")
-        #     check_dimensions_match(mixture_feedforward.get_output_dim(), 1,
-        #                            "mixture feedforward output dim", "dimension for scalar value")
+        if mixture_feedforward is not None:
+            check_dimensions_match(output_dim, mixture_feedforward.get_input_dim(),
+                                   "hidden state embedding dim", "mixture feedforward input dim")
+            check_dimensions_match(mixture_feedforward.get_output_dim(), 1,
+                                   "mixture feedforward output dim", "dimension for scalar value")
 
         if dropout > 0:
             self._dropout = torch.nn.Dropout(p=dropout)
@@ -115,10 +118,9 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # (group_size, action_embedding_dim)
         predicted_action_embedding = self._dropout(self._output_projection_layer(action_query))
 
-        # considered_actions, actions_to_embed, actions_to_link = self._get_actions_to_consider(state)
-        actions_to_link = []
-        considered_actions, actions_to_embed = self._get_actions_to_consider(state)
-        # For now we're focusing on embedded actions
+        considered_actions, actions_to_embed, actions_to_link = self._get_actions_to_consider(state)
+        # actions_to_link = []
+        # considered_actions, actions_to_embed = self._get_actions_to_consider(state)
 
         # action_embeddings: (group_size, num_embedded_actions, action_embedding_dim)
         # action_mask: (group_size, num_embedded_actions)
@@ -135,13 +137,13 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         if actions_to_link:
             # entity_action_logits: (group_size, num_entity_actions)
             # entity_action_mask: (group_size, num_entity_actions)
-            entity_action_logits, entity_action_mask, entity_type_embeddings = \
+            entity_action_logits, entity_action_mask = \
                     self._get_entity_action_logits(state, actions_to_link, attention_weights)
 
             # The `action_embeddings` tensor gets used later as the input to the next decoder step.
             # For linked actions, we don't have any action embedding, so we use the entity type
             # instead.
-            action_embeddings = torch.cat([action_embeddings, entity_type_embeddings], dim=1)
+            # action_embeddings = torch.cat([action_embeddings, entity_type_embeddings], dim=1)
 
             if self._mixture_feedforward is not None:
                 # The entity and action logits are combined with a mixture weight to prevent the
@@ -175,6 +177,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                         attention_weights,
                                         considered_actions,
                                         allowed_actions,
+                                        self._identifier_literal_action_embedding,
                                         max_actions)
         end = time.time() - start
         # print("Time to compute new states", end)
@@ -286,8 +289,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             # Finally, we pad the linked portion.
             while len(considered_actions[-1]) < num_embedded_actions + num_linked_actions:
                 considered_actions[-1].append(-1)
-        # return considered_actions, embedded_actions, linked_actions
-        return considered_actions, embedded_actions
+        return considered_actions, embedded_actions, linked_actions
 
     @staticmethod
     def _get_action_embeddings(state: JavaDecoderState,
@@ -343,100 +345,103 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         action_mask = util.get_mask_from_sequence_lengths(sequence_lengths, max_num_actions)
         return action_embeddings, action_mask
 
-    # def _get_entity_action_logits(self,
-    #                               state: JavaDecoderState,
-    #                               actions_to_link: List[List[int]],
-    #                               attention_weights: torch.Tensor) -> Tuple[torch.FloatTensor,
-    #                                                                         torch.LongTensor,
-    #                                                                         torch.FloatTensor]:
-    #     """
-    #     Returns scores for each action in ``actions_to_link`` that are derived from the linking
-    #     scores between the question and the table entities, and the current attention on the
-    #     question.  The intuition is that if we're paying attention to a particular word in the
-    #     question, we should tend to select entity productions that we think that word refers to.
-    #     We additionally return a mask representing which elements in the returned ``action_logits``
-    #     tensor are just padding, and an embedded representation of each action that can be used as
-    #     input to the next step of the encoder.  That embedded representation is derived from the
-    #     type of the entity produced by the action.
-    #
-    #     The ``actions_to_link`` are in terms of the `batch` action list passed to
-    #     ``model.forward()``.  We need to convert these integers into indices into the linking score
-    #     tensor, which has shape (batch_size, num_entities, num_question_tokens), look up the
-    #     linking score for each entity, then aggregate the scores using the current question
-    #     attention.
-    #
-    #     Parameters
-    #     ----------
-    #     state : ``JavaDecoderState``
-    #         The current state.  We'll use this to get the linking scores.
-    #     actions_to_link : ``List[List[int]]``
-    #         A list of _batch_ action indices for each group element.  Should have shape
-    #         (group_size, num_actions), unpadded.  This is expected to be output from
-    #         :func:`_get_actions_to_consider`.
-    #     attention_weights : ``torch.Tensor``
-    #         The current attention weights over the question tokens.  Should have shape
-    #         ``(group_size, num_question_tokens)``.
-    #
-    #     Returns
-    #     -------
-    #     action_logits : ``torch.FloatTensor``
-    #         A score for each of the given actions.  Shape is ``(group_size, num_actions)``, where
-    #         ``num_actions`` is the maximum number of considered actions for any group element.
-    #     action_mask : ``torch.LongTensor``
-    #         A mask of shape ``(group_size, num_actions)`` indicating which ``(group_index,
-    #         action_index)`` pairs were merely added as padding.
-    #     type_embeddings : ``torch.LongTensor``
-    #         A tensor of shape ``(group_size, num_actions, action_embedding_dim)``, with an embedded
-    #         representation of the `type` of the entity corresponding to each action.
-    #     """
-    #     # First we map the actions to entity indices, using state.actions_to_entities, and find the
-    #     # type of each entity using state.entity_types.
-    #     action_entities: List[List[int]] = []
-    #     entity_types: List[List[int]] = []
-    #     for batch_index, action_list in zip(state.batch_indices, actions_to_link):
-    #         action_entities.append([])
-    #         entity_types.append([])
-    #         for action_index in action_list:
-    #             entity_index = state.actions_to_entities[(batch_index, action_index)]
-    #             action_entities[-1].append(entity_index)
-    #             entity_types[-1].append(state.entity_types[entity_index])
-    #
-    #     # Then we create a padded tensor suitable for use with
-    #     # `state.flattened_linking_scores.index_select()`.
-    #     num_actions = [len(action_list) for action_list in action_entities]
-    #     max_num_actions = max(num_actions)
-    #     padded_actions = [common_util.pad_sequence_to_length(action_list, max_num_actions)
-    #                       for action_list in action_entities]
-    #     padded_types = [common_util.pad_sequence_to_length(type_list, max_num_actions)
-    #                     for type_list in entity_types]
-    #     # Shape: (group_size, num_actions)
-    #     action_tensor = Variable(state.score[0].data.new(padded_actions).long())
-    #     type_tensor = Variable(state.score[0].data.new(padded_types).long())
-    #
-    #     # To get the type embedding tensor, we just use an embedding matrix on the list of entity
-    #     # types.
-    #     type_embeddings = self._entity_type_embedding(type_tensor)
-    #
-    #     # `state.flattened_linking_scores` is shape (batch_size * num_entities, num_question_tokens).
-    #     # We want to select from this using `action_tensor` to get a tensor of shape (group_size,
-    #     # num_actions, num_question_tokens).  Unfortunately, the index_select functions in nn.util
-    #     # don't do this operation.  So we'll do some reshapes and do the index_select ourselves.
-    #     group_size = len(state.batch_indices)
-    #     num_question_tokens = state.flattened_linking_scores.size(-1)
-    #     flattened_actions = action_tensor.view(-1)
-    #     # (group_size * num_actions, num_question_tokens)
-    #     flattened_action_linking = state.flattened_linking_scores.index_select(0, flattened_actions)
-    #     # (group_size, num_actions, num_question_tokens)
-    #     action_linking = flattened_action_linking.view(group_size, max_num_actions, num_question_tokens)
-    #
-    #     # Now we get action logits by weighting these entity x token scores by the attention over
-    #     # the question tokens.  We can do this efficiently with torch.bmm.
-    #     action_logits = action_linking.bmm(attention_weights.unsqueeze(-1)).squeeze(-1)
-    #
-    #     # Finally, we make a mask for our action logit tensor.
-    #     sequence_lengths = Variable(action_linking.data.new(num_actions))
-    #     action_mask = util.get_mask_from_sequence_lengths(sequence_lengths, max_num_actions)
-    #     return action_logits, action_mask, type_embeddings
+    def _get_entity_action_logits(self,
+                                  state: JavaDecoderState,
+                                  actions_to_link: List[List[int]],
+                                  attention_weights: torch.Tensor) -> Tuple[torch.FloatTensor,
+                                                                            torch.LongTensor,
+                                                                            torch.FloatTensor]:
+        """
+        Returns scores for each action in ``actions_to_link`` that are derived from the linking
+        scores between the question and the table entities, and the current attention on the
+        question.  The intuition is that if we're paying attention to a particular word in the
+        question, we should tend to select entity productions that we think that word refers to.
+        We additionally return a mask representing which elements in the returned ``action_logits``
+        tensor are just padding, and an embedded representation of each action that can be used as
+        input to the next step of the encoder.  That embedded representation is derived from the
+        type of the entity produced by the action.
+
+        The ``actions_to_link`` are in terms of the `batch` action list passed to
+        ``model.forward()``.  We need to convert these integers into indices into the linking score
+        tensor, which has shape (batch_size, num_entities, num_question_tokens), look up the
+        linking score for each entity, then aggregate the scores using the current question
+        attention.
+
+        Parameters
+        ----------
+        state : ``JavaDecoderState``
+            The current state.  We'll use this to get the linking scores.
+        actions_to_link : ``List[List[int]]``
+            A list of _batch_ action indices for each group element.  Should have shape
+            (group_size, num_actions), unpadded.  This is expected to be output from
+            :func:`_get_actions_to_consider`.
+        attention_weights : ``torch.Tensor``
+            The current attention weights over the question tokens.  Should have shape
+            ``(group_size, num_question_tokens)``.
+
+        Returns
+        -------
+        action_logits : ``torch.FloatTensor``
+            A score for each of the given actions.  Shape is ``(group_size, num_actions)``, where
+            ``num_actions`` is the maximum number of considered actions for any group element.
+        action_mask : ``torch.LongTensor``
+            A mask of shape ``(group_size, num_actions)`` indicating which ``(group_index,
+            action_index)`` pairs were merely added as padding.
+        type_embeddings : ``torch.LongTensor``
+            A tensor of shape ``(group_size, num_actions, action_embedding_dim)``, with an embedded
+            representation of the `type` of the entity corresponding to each action.
+        """
+        # First we map the actions to entity indices, using state.actions_to_entities, and find the
+        # type of each entity using state.entity_types.
+        action_entities: List[List[int]] = []
+        entity_types: List[List[int]] = []
+        for batch_index, action_list in zip(state.batch_indices, actions_to_link):
+            action_entities.append([])
+            entity_types.append([])
+            for action_index in action_list:
+                entity_index = state.actions_to_entities[(batch_index, action_index)]
+                action_entities[-1].append(entity_index)
+                # All entities will have the same type here. In the java paper all the previous
+                # action embeddings for rules identifier/literal are denoted by one special rule
+                # "IdentifierOrLiteral" to collapse the large number of rules into 1.
+                entity_types[-1].append(0)  # state.entity_types[entity_index])
+
+        # Then we create a padded tensor suitable for use with
+        # `state.flattened_linking_scores.index_select()`.
+        num_actions = [len(action_list) for action_list in action_entities]
+        max_num_actions = max(num_actions)
+        padded_actions = [common_util.pad_sequence_to_length(action_list, max_num_actions)
+                          for action_list in action_entities]
+        # padded_types = [common_util.pad_sequence_to_length(type_list, max_num_actions)
+        #                 for type_list in entity_types]
+        # Shape: (group_size, num_actions)
+        action_tensor = Variable(state.score[0].data.new(padded_actions).long())
+        # type_tensor = Variable(state.score[0].data.new(padded_types).long())
+
+        # To get the type embedding tensor, we just use an embedding matrix on the list of entity
+        # types.
+        # type_embeddings = self._entity_type_embedding(type_tensor)
+
+        # `state.flattened_linking_scores` is shape (batch_size * num_entities, num_question_tokens).
+        # We want to select from this using `action_tensor` to get a tensor of shape (group_size,
+        # num_actions, num_question_tokens).  Unfortunately, the index_select functions in nn.util
+        # don't do this operation.  So we'll do some reshapes and do the index_select ourselves.
+        group_size = len(state.batch_indices)
+        num_question_tokens = state.flattened_linking_scores.size(-1)
+        flattened_actions = action_tensor.view(-1)
+        # (group_size * num_actions, num_question_tokens)
+        flattened_action_linking = state.flattened_linking_scores.index_select(0, flattened_actions)
+        # (group_size, num_actions, num_question_tokens)
+        action_linking = flattened_action_linking.view(group_size, max_num_actions, num_question_tokens)
+
+        # Now we get action logits by weighting these entity x token scores by the attention over
+        # the question tokens.  We can do this efficiently with torch.bmm.
+        action_logits = action_linking.bmm(attention_weights.unsqueeze(-1)).squeeze(-1)
+
+        # Finally, we make a mask for our action logit tensor.
+        sequence_lengths = Variable(action_linking.data.new(num_actions))
+        action_mask = util.get_mask_from_sequence_lengths(sequence_lengths, max_num_actions)
+        return action_logits, action_mask #, type_embeddings
 
     @staticmethod
     def _compute_new_states(state: JavaDecoderState,
@@ -448,6 +453,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                             attention_weights: torch.Tensor,
                             considered_actions: List[List[int]],
                             allowed_actions: List[Set[int]],
+                            identifier_literal_action_embedding: torch.Tensor,
                             max_actions: int = None) -> List[JavaDecoderState]:
         # Each group index here might get accessed multiple times, and doing the slicing operation
         # each time is more expensive than doing it once upfront.  These three lines give about a
@@ -500,13 +506,18 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 new_action_history = state.action_history[group_index] + [action]
                 new_score = state.score[group_index] + sorted_log_probs[group_index, action_index]
 
-                # `action_index` is the index in the _sorted_ tensors, but the action embedding
-                # matrix is _not_ sorted, so we need to get back the original, non-sorted action
-                # index before we get the action embedding.
-                action_embedding_index = sorted_actions[group_index][action_index]
-                action_embedding = action_embeddings[group_index, action_embedding_index, :]
                 production_rule = state.possible_actions[batch_index][action][0]
                 new_grammar_state = state.grammar_state[group_index].take_action(production_rule)
+
+                lhs, _ = production_rule.split('-->')
+                if lhs == 'IdentifierNT' or '_literal' in lhs:
+                    action_embedding = identifier_literal_action_embedding
+                else:
+                    # `action_index` is the index in the _sorted_ tensors, but the action embedding
+                    # matrix is _not_ sorted, so we need to get back the original, non-sorted action
+                    # index before we get the action embedding.
+                    action_embedding_index = sorted_actions[group_index][action_index]
+                    action_embedding = action_embeddings[group_index, action_embedding_index, :]
 
                 # Pop the old parent states and push the new ones one num nonterminals times since
                 # each of the nonterminals will use it.
@@ -525,8 +536,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 else:
                     new_debug_info = None
 
-                # todo(rajas): create a single identifier state-embedding if rule was identifier
-                # todo added to the dataset reader?
                 new_rnn_state = RnnState(hidden_state[group_index],
                                          memory_cell[group_index],
                                          action_embedding,
@@ -536,17 +545,16 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                          new_parent_states)
 
                 new_state = JavaDecoderState(batch_indices=[batch_index],
-                                                   action_history=[new_action_history],
-                                                   score=[new_score],
-                                                   rnn_state=[new_rnn_state],
-                                                   grammar_state=[new_grammar_state],
-                                                   action_embeddings=state.action_embeddings,
-                                                   action_indices=state.action_indices,
-                                                   possible_actions=state.possible_actions,
-                                                   # flattened_linking_scores=state.flattened_linking_scores,
-                                                   # actions_to_entities=state.actions_to_entities,
-                                                   # entity_types=state.entity_types,
-                                                   # debug_info=new_debug_info
-                                                    )
+                                             action_history=[new_action_history],
+                                             score=[new_score],
+                                             rnn_state=[new_rnn_state],
+                                             grammar_state=[new_grammar_state],
+                                             action_embeddings=state.action_embeddings,
+                                             action_indices=state.action_indices,
+                                             possible_actions=state.possible_actions,
+                                             flattened_linking_scores=state.flattened_linking_scores,
+                                             actions_to_entities=state.actions_to_entities,
+                                             # entity_types=state.entity_types,
+                                             debug_info=new_debug_info)
                 new_states.append(new_state)
         return new_states

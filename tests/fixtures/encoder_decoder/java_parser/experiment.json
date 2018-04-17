@@ -2,7 +2,15 @@
   "dataset_reader":{
     "type":"java",
     "utterance_indexers":{"tokens": {"namespace": "utterance"}},
-    "min_identifier_count": 1
+    // # todo(rajas): figure out why identifier count of 1 causes a 0 grad
+    // for linking params.
+    "min_identifier_count": 1,
+    "linking_feature_extractors": [
+      "exact_token_match",
+      "contains_exact_token_match",
+      "edit_distance",
+      "span_overlap_fraction"
+    ]
   },
 //  "vocabulary": {
 //    "min_count": {"utterance": 2}
@@ -13,6 +21,8 @@
 
   "model": {
     "action_embedding_dim": 50,
+    "num_linking_features": 4,
+    "dropout": 0.5,
     "type": "java_parser",
     "utterance_embedder": {
       "tokens": {
@@ -28,6 +38,13 @@
       "hidden_size": 25,
       "num_layers": 1,
       "bidirectional": true
+    },
+    "mixture_feedforward": {
+      "input_dim": 50,
+      "num_layers": 3,
+      "hidden_dims": [5, 2, 1],
+      "activations": ["relu", "sigmoid", "sigmoid"],
+      "dropout": [0.2, 0.0, 0.0]
     },
     "max_decoding_steps": 150,
     "decoder_beam_search": {

@@ -71,7 +71,7 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
         batch_scores = self._group_scores_by_batch(finished_states)
         loss = 0
         for score in batch_scores.values():  # we don't care about the batch index, just the scores
-            loss += -score
+            loss += -score[0]
         return {'loss': loss / len(finished_states)}
 
     @staticmethod
