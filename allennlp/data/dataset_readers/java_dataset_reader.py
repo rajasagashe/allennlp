@@ -51,29 +51,30 @@ class JavaDatasetReader(DatasetReader):
         with open(file_path) as dataset_file:
             dataset = json.load(dataset_file)
 
-        if self._num_dataset_instances != -1:
-            dataset = dataset[0:self._num_dataset_instances]
-
-        # Prepare global production rules to be used in JavaGrammarState.
-        lhs2unique_rhs = self.trim_grammar_identifiers_literals(dataset)
-
-        global_production_rule_fields, rule2index = self.get_global_rule_fields(lhs2unique_rhs)
+        global_production_rule_fields, global_rule2index = self.get_global_rule_fields(dataset)
 
 
         logger.info("Reading the dataset")
         for record in dataset:
             instance = self.text_to_instance(record['nl'],
                                              record['varNames'],
-                                             record['varTypes'],
+                                             # record['varTypes'],
                                              record['methodNames'],
-                                             record['methodReturns'],
-                                             record['code'],
-                                             record['rules'],
+                                             # record['methodReturns'],
                                              global_production_rule_fields,
-                                             rule2index)
+                                             global_rule2index,
+                                             record['code'],
+                                             record['rules']
+                                             )
             yield instance
 
-    def get_global_rule_fields(self, lhs2all_rhs):
+    def get_global_rule_fields(self, dataset):
+        if self._num_dataset_instances != -1:
+            dataset = dataset[0:self._num_dataset_instances]
+
+        # Prepare global production rules to be used in JavaGrammarState.
+        lhs2all_rhs = self.trim_grammar_identifiers_literals(dataset)
+
         # Converts all the rules into ProductionRuleFields and returns a dictionary
         # from the rule to its index in the ListField of ProductionRuleFields.
         production_rule_fields = []
@@ -82,7 +83,7 @@ class JavaDatasetReader(DatasetReader):
         index = 0
         for lhs, all_rhs in lhs2all_rhs.items():
             for rhs in all_rhs:
-                rule = lhs+'-->'+'___'.join(rhs)
+                rule = lhs + '-->' + '___'.join(rhs)
                 if 'scriniclass' in rhs or 'srinifunc' in rhs:
                     # Names from environment shouldn't be added to global rules.
                     continue
@@ -92,6 +93,84 @@ class JavaDatasetReader(DatasetReader):
                 rule2index[rule] = index
                 index += 1
         return production_rule_fields, rule2index
+
+    @overrides
+    def text_to_instance(self,  # type: ignore
+                         utterance: List[str],
+                         variable_names: List[str],
+                         method_names: List[str],
+                         global_rule_fields: List[ProductionRuleField],
+                         globalrule2index: Dict[str, int],
+                         code: str = None,
+                         rules: List[str] = None,
+                         ) -> Instance:
+
+        # variable_name_fields = self.add_camel_case_split_tokens(variable_names)
+        # method_name_fields = self.add_camel_case_split_tokens(method_names)
+        #
+        # # todo(rajas) change the indexers below to type indexers
+        # variable_types_field = TextField([Token(t.lower()) for t in variable_types], self._utterance_indexers)
+        # method_return_types_field = TextField([Token(t.lower()) for t in method_return_types], self._utterance_indexers)
+
+        # todo(rajas) add camel casing in back later
+        # utterance = [t for word in utterance for t in self.split_camel_case(word)]
+        # utterance = [t for word in utterance for t in self.split_camel_case(word)]
+        fields = {}
+
+        utterance_tokens = [Token(t.lower()) for t in utterance]
+        utterance_field = TextField(utterance_tokens, self._utterance_indexers)
+
+        if code is not None:
+            code_field = MetadataField({'code': code})
+            fields['code'] = code_field
+
+        knowledge_graph = self.get_java_class_knowledge_graph(method_names=method_names, variable_names=variable_names)
+
+        # We need to iterate over knowledge_graph's entities since these are sorted and each entity in
+        # entity_tokens needs to correspond to knowledge_graph's entities.
+        entity_tokens = []
+        for entity in knowledge_graph.entities:
+            entity_text = knowledge_graph.entity_text[entity]
+            # Entity tokens should contain the camel case split of entity
+            # e.g. isParsed -> is, Parsed and isParsed
+            # So if the utterance has word parsed, it will appear in the exact text set
+            # of knowledge graph field.
+            entity_camel_split = self.split_camel_case(entity_text)
+            entity_tokens.append([Token(e) for e in entity_camel_split])
+
+        # todo(rajas): add a feature that filters out trivial links between utterance
+        # and variables when the utterance has word 'is' and variable is 'isParsed'.
+        # however if utterance has 'parsed' then it should be linked with 'isParsed'.
+        java_class_field = KnowledgeGraphField(knowledge_graph=knowledge_graph,
+                                               utterance_tokens=utterance_tokens,
+                                               token_indexers=self._environment_token_indexers,
+                                               entity_tokens=entity_tokens,
+                                               feature_extractors=self._linking_feature_extractors)
+
+        environment_rules, environmentrule2index = self.get_java_class_rules(knowledge_graph)
+
+        if rules is not None:
+            target_rule_field = self.get_target_rule_index_field(rules, globalrule2index, environmentrule2index)
+            fields['rules'] = target_rule_field
+
+
+        entity_field = MetadataField(knowledge_graph.entities)
+
+        fields.update({"utterance": utterance_field,
+                  # "variable_names": variable_name_fields,
+                  # "variable_types": variable_types_field,
+                  # "method_names": method_name_fields,
+                  # "method_return_types": method_return_types_field,
+                  # "rules": target_rule_field,
+                  "actions": ListField(global_rule_fields + environment_rules),
+                  # "code": code_field,
+                  "java_class": java_class_field,
+                  "entities": entity_field
+                  })
+
+        return Instance(fields)
+
+
 
     def trim_grammar_identifiers_literals(self, dataset):
         # This is used remove identifier and literal rules, if the occur below
@@ -126,6 +205,8 @@ class JavaDatasetReader(DatasetReader):
             if trimmed_nonterminal in lhs2unique_rhs:
                 lhs2unique_rhs[trimmed_nonterminal].append(tuple(['<UNK>']))
         return lhs2unique_rhs
+
+
 
     def get_java_class_knowledge_graph(self, method_names, variable_names):
         entities = []
@@ -163,89 +244,19 @@ class JavaDatasetReader(DatasetReader):
             elif rule in globalrule2index:
                 rule_indexes.append(globalrule2index[rule])
             else:
-                lhs, rhs = rule.split('-->')
+                lhs, _ = rule.split('-->')
                 rule_indexes.append(globalrule2index[lhs + '--><UNK>'])
 
         # todo(rajas) convert to an index field
         rule_field = ArrayField(np.array(rule_indexes), padding_value=-1)
         return rule_field
 
-    @overrides
-    def text_to_instance(self,  # type: ignore
-                         utterance: List[str],
-                         variable_names: List[str],
-                         variable_types: List[str],
-                         method_names: List[str],
-                         method_return_types: List[str],
-                         code: str,
-                         rules: List[str],
-                         global_rule_fields: List[ProductionRuleField],
-                         globalrule2index: Dict[str, int]) -> Instance:
-
-        # variable_name_fields = self.add_camel_case_split_tokens(variable_names)
-        # method_name_fields = self.add_camel_case_split_tokens(method_names)
-        #
-        # # todo(rajas) change the indexers below to type indexers
-        # variable_types_field = TextField([Token(t.lower()) for t in variable_types], self._utterance_indexers)
-        # method_return_types_field = TextField([Token(t.lower()) for t in method_return_types], self._utterance_indexers)
-
-        # todo(rajas) add camel casing in back later
-        # utterance = [t for word in utterance for t in self.split_camel_case(word)]
-        # utterance = [t for word in utterance for t in self.split_camel_case(word)]
-
-        utterance_tokens = [Token(t.lower()) for t in utterance]
-        utterance_field = TextField(utterance_tokens, self._utterance_indexers)
-
-        code_field = MetadataField({'code': code})
-
-        knowledge_graph = self.get_java_class_knowledge_graph(method_names=method_names, variable_names=variable_names)
-
-        # We need to iterate over knowledge_graph's entities since these are sorted and each entity in
-        # entity_tokens needs to correspond to knowledge_graph's entities.
-        entity_tokens = []
-        for entity in knowledge_graph.entities:
-            entity_text = knowledge_graph.entity_text[entity]
-            # Entity tokens should contain the camel case split of entity
-            # e.g. isParsed -> is, Parsed and isParsed
-            # So if the utterance has word parsed, it will appear in the exact text set
-            # of knowledge graph field.
-            entity_camel_split = self.split_camel_case(entity_text)
-            entity_tokens.append([Token(e) for e in entity_camel_split])
-
-        # todo(rajas): add a feature that filters out trivial links between utterance
-        # and variables when the utterance has word 'is' and variable is 'isParsed'.
-        # however if utterance has 'parsed' then it should be linked with 'isParsed'.
-        java_class_field = KnowledgeGraphField(knowledge_graph=knowledge_graph,
-                                               utterance_tokens=utterance_tokens,
-                                               token_indexers=self._environment_token_indexers,
-                                               entity_tokens=entity_tokens,
-                                               feature_extractors=self._linking_feature_extractors)
-
-        environment_rules, environmentrule2index = self.get_java_class_rules(knowledge_graph)
-        target_rule_field = self.get_target_rule_index_field(rules, globalrule2index, environmentrule2index)
-
-        entity_field = MetadataField(knowledge_graph.entities)
-
-        fields = {"utterance": utterance_field,
-                  # "variable_names": variable_name_fields,
-                  # "variable_types": variable_types_field,
-                  # "method_names": method_name_fields,
-                  # "method_return_types": method_return_types_field,
-                  "rules": target_rule_field,
-                  "actions": ListField(global_rule_fields + environment_rules),
-                  "code": code_field,
-                  "java_class": java_class_field,
-                  "entities": entity_field
-                  }
-
-        return Instance(fields)
-
-    def add_camel_case_split_tokens(self, words: List[str]) -> ListField:
-        fields: List[Field] = []
-        for word in words:
-            tokens = [Token(text=w) for w in self.split_camel_case(word)]
-            fields.append(TextField(tokens, self._utterance_indexers)) # todo change this
-        return ListField(fields)
+    # def add_camel_case_split_tokens(self, words: List[str]) -> ListField:
+    #     fields: List[Field] = []
+    #     for word in words:
+    #         tokens = [Token(text=w) for w in self.split_camel_case(word)]
+    #         fields.append(TextField(tokens, self._utterance_indexers)) # todo change this
+    #     return ListField(fields)
 
     @staticmethod
     def split_camel_case(name: str) -> List[str]:

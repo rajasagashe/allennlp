@@ -29,8 +29,12 @@ from allennlp.service.predictors import DemoModel
 # that have the same ``Predictor`` wrapper. The corresponding model
 # will be served at the `/predict/<name-of-task>` API endpoint.
 DEFAULT_MODELS = {
+        'java-parser': DemoModel(
+                'java-models/temp-for-demo/model.tar.gz',  # pylint: disable=line-too-long
+                'java-parser'
+        ),
         'wikitables-parser': DemoModel(
-                'https://s3-us-west-2.amazonaws.com/allennlp/models/wikitables-model-preliminary-2018.02.15.tar.gz',  # pylint: disable=line-too-long
+                'models/temp-wiki-for-demo/model.tar.gz',  # pylint: disable=line-too-long
                 'wikitables-parser'
         ),
         'machine-comprehension': DemoModel(

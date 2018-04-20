@@ -5,6 +5,7 @@ import SrlComponent from './components/SrlComponent';
 import TeComponent from './components/TeComponent';
 import McComponent from './components/McComponent';
 import WikiTablesComponent from './components/WikiTablesComponent';
+import JavaComponent from './components/JavaComponent';
 import CorefComponent from './components/CorefComponent'
 import NamedEntityComponent from './components/NamedEntityComponent'
 import ConstituencyParserComponent from './components/ConstituencyParserComponent'
@@ -123,6 +124,9 @@ class Demo extends React.Component {
       }
       else if (selectedModel === "wikitables-parser") {
         return (<WikiTablesComponent requestData={requestData} responseData={responseData}/>)
+      }
+      else if (selectedModel === "java-parser") {
+        return (<JavaComponent requestData={requestData} responseData={responseData}/>)
       }
     }
 
