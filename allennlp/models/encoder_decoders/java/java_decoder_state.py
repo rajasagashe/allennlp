@@ -19,7 +19,7 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                  rnn_state: List[RnnState],
                  grammar_state: List[JavaGrammarState],
                  # nonterminal_action_indices: List[int],
-                 action_embeddings: torch.Tensor,
+                 # action_embeddings: torch.Tensor,
                  action_indices: Dict[Tuple[int, int], int],
                  possible_actions: List[List[ProductionRuleArray]],
                  flattened_linking_scores: torch.FloatTensor,
@@ -32,7 +32,7 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         super(JavaDecoderState, self).__init__(batch_indices, action_history, score)
         self.rnn_state = rnn_state
         self.grammar_state = grammar_state
-        self.action_embeddings = action_embeddings
+        # self.action_embeddings = action_embeddings
         self.action_indices = action_indices
         self.possible_actions = possible_actions
         self.flattened_linking_scores = flattened_linking_scores
@@ -77,7 +77,7 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                                 action_history=action_histories,
                                 score=scores,
                                 rnn_state=rnn_state,
-                                action_embeddings=states[0].action_embeddings,
+                                # action_embeddings=states[0].action_embeddings,
                                 action_indices=states[0].action_indices,
                                 grammar_state=grammar_states,
                                 possible_actions=states[0].possible_actions,

@@ -10,6 +10,7 @@ from torch.nn.modules.rnn import LSTMCell
 from torch.nn.modules.linear import Linear
 
 from allennlp.common import util as common_util
+from allennlp.common.util import timeit
 from allennlp.nn import util
 from allennlp.modules import Attention, FeedForward, Embedding
 from allennlp.modules.similarity_functions import SimilarityFunction
@@ -29,12 +30,14 @@ from allennlp.models.encoder_decoders.java.java_decoder_state import JavaDecoder
 class JavaDecoderStep(DecoderStep[JavaDecoderState]):
     def __init__(self,
                  encoder_output_dim: int,
+                 action_embedder: Embedding,
                  action_embedding_dim: int,
                  attention_function: SimilarityFunction,
                  mixture_feedforward: FeedForward = None,
                  num_entity_types: int = 1,
                  dropout: float = 0.0) -> None:
         super(JavaDecoderStep, self).__init__()
+        self._action_embedder = action_embedder
         self._mixture_feedforward = mixture_feedforward
 
         # self._entity_type_embedding = Embedding(num_entity_types, action_embedding_dim)
@@ -73,6 +76,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             self._dropout = lambda x: x
 
     @overrides
+    # @timeit
     def take_step(self,
                   state: JavaDecoderState,
                   max_actions: int = None,
@@ -84,6 +88,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # the new hidden state and the new attention to predict an output, then yield new states.
         # Each new state corresponds to one valid action that can be taken from the current state,
         # and they are ordered by their probability of being selected.
+
+        take_step_start = time.time()
         attended_question = torch.stack([rnn_state.attended_input for rnn_state in state.rnn_state])
         hidden_state = torch.stack([rnn_state.hidden_state for rnn_state in state.rnn_state])
         memory_cell = torch.stack([rnn_state.memory_cell for rnn_state in state.rnn_state])
@@ -92,7 +98,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # The parent is the top most element on the parent_states stack.
         parent_action_embedding = torch.stack([rnn_state.parent_states[-1]
                                                for rnn_state in state.rnn_state])
-
+        endtime1 = time.time()
+        timediff1 = endtime1 - take_step_start
+        # print('-------')
+        # print('End1 stacking time', timediff1)
         # todo(rajas): get the current non terminal embedding if accuracy suffers
 
         # (group_size, decoder_input_dim)
@@ -110,6 +119,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                                        encoder_outputs,
                                                                        encoder_output_mask.float())
 
+
         # To predict an action, we'll use a concatenation of the hidden state and attention over
         # the question.  We'll just predict an _embedding_, which we will compare to embedded
         # representations of all valid actions to get a final output.
@@ -118,9 +128,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # (group_size, action_embedding_dim)
         predicted_action_embedding = self._dropout(self._output_projection_layer(action_query))
 
+        time_end_attend = time.time() - timediff1
+        # print("Time to main decoder ops", time_end_attend)
+
         considered_actions, actions_to_embed, actions_to_link = self._get_actions_to_consider(state)
-        # actions_to_link = []
-        # considered_actions, actions_to_embed = self._get_actions_to_consider(state)
 
         # action_embeddings: (group_size, num_embedded_actions, action_embedding_dim)
         # action_mask: (group_size, num_embedded_actions)
@@ -167,22 +178,37 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             action_mask = embedded_action_mask.float()
             log_probs = util.masked_log_softmax(action_logits, action_mask)
 
-        start = time.time()
-        x = self._compute_new_states(state,
-                                        log_probs,
-                                        hidden_state,
-                                        memory_cell,
-                                        action_embeddings,
-                                        attended_question,
-                                        attention_weights,
-                                        considered_actions,
-                                        allowed_actions,
-                                        self._identifier_literal_action_embedding,
-                                        max_actions)
-        end = time.time() - start
-        # print("Time to compute new states", end)
+        take_step_end = time.time() - take_step_start
+        # print("Time for take step", take_step_end * 1000)
 
-        return x
+        if allowed_actions is not None:
+            # return self._compute_new_single_state()
+            return self._compute_new_states(state,
+                                            log_probs,
+                                            hidden_state,
+                                            memory_cell,
+                                            action_embeddings,
+                                            attended_question,
+                                            attention_weights,
+                                            considered_actions,
+                                            allowed_actions,
+                                            self._identifier_literal_action_embedding,
+                                            max_actions)
+
+        else:
+            # This method is slow but integrates well with beam search, so use it
+            # for inference.
+            return self._compute_new_states(state,
+                                            log_probs,
+                                            hidden_state,
+                                            memory_cell,
+                                            action_embeddings,
+                                            attended_question,
+                                            attention_weights,
+                                            considered_actions,
+                                            allowed_actions,
+                                            self._identifier_literal_action_embedding,
+                                            max_actions)
 
     def attend_on_question(self,
                            query: torch.Tensor,
@@ -290,9 +316,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             while len(considered_actions[-1]) < num_embedded_actions + num_linked_actions:
                 considered_actions[-1].append(-1)
         return considered_actions, embedded_actions, linked_actions
-
-    @staticmethod
-    def _get_action_embeddings(state: JavaDecoderState,
+    # @timeit
+    def _get_action_embeddings(self,state: JavaDecoderState,
                                actions_to_embed: List[List[int]]) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns an embedded representation for all actions in ``actions_to_embed``, using the state
@@ -329,8 +354,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # functions in nn.util don't do this operation.  So we'll do some reshapes and do the
         # index_select ourselves.
         group_size = len(state.batch_indices)
-        action_embedding_dim = state.action_embeddings.size(-1)
-        flattened_actions = action_tensor.view(-1)
+        # action_embedding_dim = state.action_embeddings.size(-1)
+        # flattened_actions = action_tensor.view(-1)
         # print('---------')
         # print('action_tensor', action_tensor.size())
         # print('flattened_actions', flattened_actions.size())
@@ -339,8 +364,9 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # print('num_actions', num_actions)
         # print('max_num_actions', max_num_actions)
         # print()
-        flattened_action_embeddings = state.action_embeddings.index_select(0, flattened_actions)
-        action_embeddings = flattened_action_embeddings.view(group_size, max_num_actions, action_embedding_dim)
+        # flattened_action_embeddings = state.action_embeddings.index_select(0, flattened_actions)
+        # action_embeddings = flattened_action_embeddings.view(group_size, max_num_actions, action_embedding_dim)
+        action_embeddings = self._action_embedder(action_tensor)
         sequence_lengths = Variable(action_embeddings.data.new(num_actions))
         action_mask = util.get_mask_from_sequence_lengths(sequence_lengths, max_num_actions)
         return action_embeddings, action_mask
@@ -444,6 +470,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         return action_logits, action_mask #, type_embeddings
 
     @staticmethod
+    # @timeit
     def _compute_new_states(state: JavaDecoderState,
                             log_probs: torch.Tensor,
                             hidden_state: torch.Tensor,
@@ -460,9 +487,12 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # 10% speedup in training time.  I also tried this with sorted_log_probs and
         # action_embeddings, but those get accessed for _each action_, so doing the splits there
         # didn't help.
+        start1 = time.time()
         hidden_state = [x.squeeze(0) for x in hidden_state.split(1, 0)]
         memory_cell = [x.squeeze(0) for x in memory_cell.split(1, 0)]
         attended_question = [x.squeeze(0) for x in attended_question.split(1, 0)]
+        end1 = time.time()
+        # print('compute new states split time', (end1-start1) * 1000)
 
         sorted_log_probs, sorted_actions = log_probs.sort(dim=-1, descending=True)
         if max_actions is not None:
@@ -489,6 +519,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                     continue
                 best_next_states[batch_index].append((group_index, action_index, action))
         new_states = []
+        time2 = time.time()
         for batch_index, best_states in sorted(best_next_states.items()):
             if max_actions is not None:
                 # We sorted previously by _group_index_, but we then combined by _batch_index_.  We
@@ -549,7 +580,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                              score=[new_score],
                                              rnn_state=[new_rnn_state],
                                              grammar_state=[new_grammar_state],
-                                             action_embeddings=state.action_embeddings,
+                                             # action_embeddings=state.action_embeddings,
                                              action_indices=state.action_indices,
                                              possible_actions=state.possible_actions,
                                              flattened_linking_scores=state.flattened_linking_scores,
@@ -557,4 +588,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                              # entity_types=state.entity_types,
                                              debug_info=new_debug_info)
                 new_states.append(new_state)
+        end2 = time.time()
+        # print('compute new initialize new state time', (end2-time2)*1000)
         return new_states
