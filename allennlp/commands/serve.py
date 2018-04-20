@@ -30,7 +30,7 @@ from allennlp.service.predictors import DemoModel
 # will be served at the `/predict/<name-of-task>` API endpoint.
 DEFAULT_MODELS = {
         'java-parser': DemoModel(
-                'java-models/temp-for-demo/model.tar.gz',  # pylint: disable=line-too-long
+                'java-models/small-low-identifiercount/model.tar.gz',  # pylint: disable=line-too-long
                 'java-parser'
         ),
         'wikitables-parser': DemoModel(
