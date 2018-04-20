@@ -51,6 +51,9 @@ class JavaDatasetReader(DatasetReader):
         with open(file_path) as dataset_file:
             dataset = json.load(dataset_file)
 
+        if self._num_dataset_instances != -1:
+            dataset = dataset[0:self._num_dataset_instances]
+
         global_production_rule_fields, global_rule2index = self.get_global_rule_fields(dataset)
 
 
@@ -69,9 +72,6 @@ class JavaDatasetReader(DatasetReader):
             yield instance
 
     def get_global_rule_fields(self, dataset):
-        if self._num_dataset_instances != -1:
-            dataset = dataset[0:self._num_dataset_instances]
-
         # Prepare global production rules to be used in JavaGrammarState.
         lhs2all_rhs = self.trim_grammar_identifiers_literals(dataset)
 
@@ -84,7 +84,7 @@ class JavaDatasetReader(DatasetReader):
         for lhs, all_rhs in lhs2all_rhs.items():
             for rhs in all_rhs:
                 rule = lhs + '-->' + '___'.join(rhs)
-                if 'scriniclass' in rhs or 'srinifunc' in rhs:
+                if 'sriniclass' in rule or 'srinifunc' in rule:
                     # Names from environment shouldn't be added to global rules.
                     continue
                 field = ProductionRuleField(rule, is_global_rule=True)
