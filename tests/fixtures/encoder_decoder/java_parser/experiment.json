@@ -4,12 +4,11 @@
     "utterance_indexers":{"tokens": {"namespace": "utterance"}},
     // # todo(rajas): figure out why identifier count of 1 causes a 0 grad
     // for linking params.
-    "min_identifier_count": 1,
+    "min_identifier_count": 2,
     "linking_feature_extractors": [
       "exact_token_match",
       "contains_exact_token_match",
-      "edit_distance",
-      "span_overlap_fraction"
+      "substring_token_match_larger_than_three"
     ]
   },
 //  "vocabulary": {
@@ -21,7 +20,7 @@
 
   "model": {
     "action_embedding_dim": 50,
-    "num_linking_features": 4,
+    "num_linking_features": 3,
     "dropout": 0.5,
     "type": "java_parser",
     "utterance_embedder": {
@@ -65,6 +64,7 @@
   "trainer": {
     "num_epochs": 2,
     "patience": 10,
+    "validation_metric": "+parse_acc",
     "cuda_device": -1,
     "optimizer": {
       "type": "adam",

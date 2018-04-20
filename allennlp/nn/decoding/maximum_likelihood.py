@@ -80,7 +80,7 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
         allowed_actions = []
         for batch_index in state.batch_indices:
             # [rules[step_num].data.cpu().numpy().tolist()[0] for rules in batch_rules]
-            action = batch_rules[batch_index][step_num].data.cpu().numpy().tolist()[0]
+            action = batch_rules[batch_index][step_num].long().data.cpu().numpy().tolist()[0]
             # global_action = action_map[(batch_index, action)]
             allowed_actions.append(action)
             # allowed_actions.append(allowed_transitions[batch_index][tuple(action_history)])
