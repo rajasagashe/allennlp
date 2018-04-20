@@ -278,9 +278,11 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
                            token: Token,
                            token_index: int,
                            tokens: List[Token]) -> float:
-        if len(entity_text) != 1:
-            return 0.0
-        return self._contains_exact_token_match(entity, entity_text, token, token_index, tokens)
+        # The first string is the entire variable/method name. The following strings
+        # are its camel case split substrings.
+        if token.text == entity_text[0].text:
+            return 1.0
+        return 0.0
 
     def _contains_exact_token_match(self,
                                     entity: str,
@@ -289,6 +291,26 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
                                     token_index: int,
                                     tokens: List[Token]) -> float:
         if token.text in self._entity_text_exact_text[entity]:
+            return 1.0
+        return 0.0
+
+    def _substring_token_match_larger_than_three(self,
+                                                   entity: str,
+                                                   entity_text: List[Token],
+                                                   token: Token,
+                                                   token_index: int,
+                                                   tokens: List[Token]) -> float:
+        # This is meant to cover matches when there is a strong overlap between the
+        # utterance token and entity, but this won't be captured by contains_exact_token_match.
+        # For example token = "total" and entity text is "_total". The camel case
+        # splitting doesn't split on underscores.
+        # todo(rajas): split on other symbols as well so this method not needed.
+        # We check for length greater than 3 since short utterance words will overlap
+        # even if there is no link e.g. token = "to" and entity text = "setConnectorInfo"
+        if len(token.text) < 3:
+            return 0.0
+        if token.text in entity_text[0].text:
+            # print(token.text, entity_text[0].text)
             return 1.0
         return 0.0
 
@@ -314,16 +336,24 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
             return 1.0
         return 0.0
 
+    def _edit_distance_code(self,
+                       entity: str,
+                       entity_text: List[Token],
+                       token: Token,
+                       token_index: int,
+                       tokens: List[Token]) -> float:
+        # We take the first element since that has the full entity string.
+        # The rest of the elements are camel split parts.
+        edit_distance = float(editdistance.eval(entity_text[0].text, token.text))
+        return 1.0 - edit_distance / len(token.text)
+
     def _edit_distance(self,
                        entity: str,
                        entity_text: List[Token],
                        token: Token,
                        token_index: int,
                        tokens: List[Token]) -> float:
-        # edit_distance = float(editdistance.eval(' '.join(e.text for e in entity_text), token.text))
-        # We take the first element since that has the full entity string.
-        # The rest of the elements are camel split parts.
-        edit_distance = float(editdistance.eval(entity_text[0].text, token.text))
+        edit_distance = float(editdistance.eval(' '.join(e.text for e in entity_text), token.text))
         return 1.0 - edit_distance / len(token.text)
 
     def _related_column(self,
