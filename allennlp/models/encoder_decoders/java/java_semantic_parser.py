@@ -4,6 +4,8 @@ from typing import Dict, Tuple, List, Set, Any
 
 import re
 
+import time
+
 from allennlp.training.metrics import Average
 from overrides import overrides
 
@@ -13,6 +15,7 @@ from torch.nn.modules.rnn import LSTMCell
 from nltk.translate.bleu_score import sentence_bleu
 
 from allennlp.common import Params
+from allennlp.common.util import timeit
 from allennlp.data.vocabulary import Vocabulary
 from allennlp.modules import Attention, TextFieldEmbedder, Seq2SeqEncoder, FeedForward
 from allennlp.modules.token_embedders import Embedding
@@ -99,6 +102,7 @@ class JavaSemanticParser(Model):
 
         self._decoder_step = JavaDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
                                              mixture_feedforward=mixture_feedforward,
+                                             action_embedder=self._action_embedder,
                                              action_embedding_dim=action_embedding_dim,
                                              attention_function=attention_function,
                                              dropout=dropout)
@@ -112,6 +116,7 @@ class JavaSemanticParser(Model):
         codef.close()
 
     @overrides
+    # @timeit
     def forward(self,  # type: ignore
                 utterance: Dict[str, torch.LongTensor],
                 # variable_names: Dict[str, torch.LongTensor],
@@ -119,10 +124,11 @@ class JavaSemanticParser(Model):
                 # method_names: Dict[str, torch.LongTensor],
                 # method_return_types: Dict[str, torch.LongTensor],
                 actions: List[List[ProductionRuleArray]],
-                rules: List[torch.Tensor],
-                code: List[Dict[str, str]],
                 java_class: Dict[str, torch.LongTensor],
-                entities: List[Set[str]]) -> Dict[str, torch.Tensor]:
+                entities: List[Set[str]],
+                rules: List[torch.Tensor] = None,
+                code: List[Dict[str, str]] = None
+                ) -> Dict[str, torch.Tensor]:
 
         # Encode summary, variables, methods with bi lstm.
         ##################################################
@@ -142,11 +148,11 @@ class JavaSemanticParser(Model):
                                                              True)
         memory_cell = Variable(encoder_outputs.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
 
-        # print("utterance weigth", self._utterance_embedder._token_embedders)
-        # print("utterance weigth", self._utterance_embedder._token_embedders['tokens'].weight.size())
+        # print("utterance weight", self._utterance_embedder._token_embedders)
+        # print("utterance weight", self._utterance_embedder._token_embedders['tokens'].weight.size())
         # exit()
         initial_score = Variable(embedded_utterance.data.new(batch_size).fill_(0))
-        action_embeddings, action_indices = self._embed_actions(actions)
+        _, action_indices = self._embed_actions(actions)
 
         linking_features = java_class['linking']
         linking_scores = self._linking_params(linking_features).squeeze(3)
@@ -186,7 +192,7 @@ class JavaSemanticParser(Model):
                                          score=initial_score_list,
                                          rnn_state=initial_rnn_state,
                                          grammar_state=initial_grammar_state,
-                                         action_embeddings=action_embeddings,
+                                         # action_embeddings=action_embeddings,
                                          action_indices=action_indices,
                                          possible_actions=actions,
                                          flattened_linking_scores=flattened_linking_scores,
@@ -200,36 +206,100 @@ class JavaSemanticParser(Model):
                                                 self._decoder_step,
                                                 rules)
         else:
-            outputs = {}
+            action_mapping = {}
+            for batch_index, batch_actions in enumerate(actions):
+                for action_index, action in enumerate(batch_actions):
+                    action_mapping[(batch_index, action_index)] = action[0]
+            outputs: Dict[str, Any] = {'action_mapping': action_mapping}
             if rules is not None:
                 outputs['loss'] = self._decoder_trainer.decode(initial_state,
                                              self._decoder_step,
                                              rules)['loss']
             num_steps = self._max_decoding_steps
+            initial_state.debug_info = [[] for _ in range(batch_size)]
             best_final_states = self._decoder_beam_search.search(num_steps,
                                                                  initial_state,
                                                                  self._decoder_step,
                                                                  keep_final_unfinished_states=False)
-            # print("BEST FINAL STATES", len(best_final_states))
+
+            outputs['best_action_sequence'] = []
+            outputs['debug_info'] = []
+            outputs['entities'] = []
+            outputs['linking_scores'] = linking_scores
+            # if self._linking_params is not None:
+            #     outputs['feature_scores'] = feature_scores
+            # todo(rajas) remove similarity scores
+            outputs['similarity_scores'] = linking_scores
+            outputs['logical_form'] = []
+
             outputs['rules'] = []
 
             for i in range(batch_size):
                 if i in best_final_states:
                     credit = 0
                     bleu = 0
+                    pred_rules = self._get_rules_from_action_history(best_final_states[i][0].action_history[0], actions[i])
                     if rules is not None:
+                        # todo(rajas): average action history function could
+                        # become a one liner with pred_rules and targ_rules
                         credit = self._average_action_history_match(best_final_states[i][0].action_history[0], rules[i])
-                        targ_rules, pred_rules = self._get_rules_from_action_history(rules[i].long().data.cpu().numpy().tolist(), best_final_states[i][0].action_history[0],
-                                                            actions[i])
+                        targ_action_history = rules[i].long().data.cpu().numpy().tolist()
+                        targ_rules = self._get_rules_from_action_history(targ_action_history, actions[i])
+
                         bleu = self._get_bleu(code[i], self._gen_code_from_rules(pred_rules))
                         self._log_code(code[i], targ_rules, pred_rules, i)
-                        self._log_rules(targ_rules, pred_rules, i)
 
                     self._action_sequence_accuracy(credit)
                     self._code_bleu(bleu)
                     outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history[0])
 
+                    outputs['best_action_sequence'].append(pred_rules)
+                    outputs['logical_form'].append(self._gen_code_from_rules(pred_rules))
+                    # print('best final states', best_final_states[i][0])
+                    # print('best final states', best_final_states[i][0].debug_info)
+
+                    outputs['debug_info'].append(best_final_states[i][0].debug_info[0])  # type: ignore
+                    outputs['entities'].append(entities[i])
+
             return outputs
+
+
+    @overrides
+    def decode(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        This method overrides ``Model.decode``, which gets called after ``Model.forward``, at test
+        time, to finalize predictions.  This is (confusingly) a separate notion from the "decoder"
+        in "encoder/decoder", where that decoder logic lives in ``WikiTablesDecoderStep``.
+
+        This method trims the output predictions to the first end symbol, replaces indices with
+        corresponding tokens, and adds a field called ``predicted_tokens`` to the ``output_dict``.
+        """
+        action_mapping = output_dict['action_mapping']
+        best_actions = output_dict["best_action_sequence"]
+        debug_infos = output_dict['debug_info']
+        batch_action_info = []
+        for batch_index, (predicted_actions, debug_info) in enumerate(zip(best_actions, debug_infos)):
+            instance_action_info = []
+            for predicted_action, action_debug_info in zip(predicted_actions, debug_info):
+                action_info = {}
+                action_info['predicted_action'] = predicted_action
+                considered_actions = action_debug_info['considered_actions']
+                probabilities = action_debug_info['probabilities']
+                actions = []
+                for action, probability in zip(considered_actions, probabilities):
+                    if action != -1:
+                        actions.append((action_mapping[(batch_index, action)], probability))
+                actions.sort()
+                considered_actions, probabilities = zip(*actions)
+                action_info['considered_actions'] = considered_actions
+                action_info['action_probabilities'] = probabilities
+                action_info['question_attention'] = action_debug_info['question_attention']
+                instance_action_info.append(action_info)
+            batch_action_info.append(instance_action_info)
+        output_dict["predicted_actions"] = batch_action_info
+        return output_dict
+
+
     @staticmethod
     def _get_bleu(gold_seq, pred_seq):
         return sentence_bleu(gold_seq, pred_seq)
@@ -238,6 +308,8 @@ class JavaSemanticParser(Model):
     def _average_action_history_match(predicted: List[int], targets: torch.LongTensor) -> int:
         # Since targets is padded with -1's we find the target's length by the first index
         # where the -1's start to occur.
+
+        # todo(Rajas) add full sequence, exact match
         min_val, unpadded_targ_length = torch.min(targets, 0)
         if min_val.data.cpu().numpy().tolist()[0] == -1:
             unpadded_targ_length = unpadded_targ_length.data.cpu().numpy().tolist()[0]
@@ -282,14 +354,20 @@ class JavaSemanticParser(Model):
                 pass
         return code
 
-    def _get_rules_from_action_history(self, target_actions:List[int], predicted_actions: List[int], actions: List[ProductionRuleArray]):
-        predicted_rules = []
-        target_rules = []
-        for a in target_actions:
-            target_rules.append(actions[a][0])
-        for a in predicted_actions:
-            predicted_rules.append(actions[a][0])
-        return target_rules, predicted_rules
+    def _get_rules_from_action_history(self, action_history: List[int], actions: List[ProductionRuleArray]):
+        rules = []
+        for a in action_history:
+            rules.append(actions[a][0])
+        return rules
+
+    # def _get_rules_from_action_history(self, target_actions :List[int], predicted_actions: List[int], actions: List[ProductionRuleArray]):
+    #     predicted_rules = []
+    #     target_rules = []
+    #     for a in target_actions:
+    #         target_rules.append(actions[a][0])
+    #     for a in predicted_actions:
+    #         predicted_rules.append(actions[a][0])
+    #     return target_rules, predicted_rules
 
     def _log_rules(self, target_rules, predicted_rules, batch):
         f = open('debug/pred_target_strings.csv', 'a')
@@ -321,6 +399,7 @@ class JavaSemanticParser(Model):
         }
 
     @staticmethod
+    # @timeit
     def _create_grammar_state(possible_actions: List[ProductionRuleArray]) -> JavaGrammarState:
         # valid_actions = world.get_valid_actions()
         # action_mapping = {}
@@ -338,6 +417,7 @@ class JavaSemanticParser(Model):
             nonterminal2action_index[lhs].append(i)
         return JavaGrammarState([START_SYMBOL], nonterminal2action_index)
 
+    # @timeit
     def _embed_actions(self, actions: List[List[ProductionRuleArray]]) -> Tuple[torch.Tensor,
                                                                                 Dict[Tuple[int, int], int]]:
         """
@@ -374,6 +454,7 @@ class JavaSemanticParser(Model):
         return embedded_actions, action_map
 
     @staticmethod
+    # @timeit
     def _map_entity_productions(linking_scores: torch.FloatTensor,
                                 batch_entities: List[Set[str]],
                                 actions: List[List[ProductionRuleArray]]) -> Tuple[torch.Tensor,
