@@ -12,7 +12,7 @@ from overrides import overrides
 import torch
 from torch.autograd import Variable
 from torch.nn.modules.rnn import LSTMCell
-from nltk.translate.bleu_score import sentence_bleu
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 
 from allennlp.common import Params
 from allennlp.common.util import timeit
@@ -76,8 +76,9 @@ class JavaSemanticParser(Model):
         #                                      attention_function=attention_function,
         #                                      nonterminal_embedder=nonterminal_embedder)
         self._decoder_trainer = MaximumLikelihood()
-        self._action_sequence_accuracy = Average()
+        self._partial_production_rule_accuracy = Average()
         self._code_bleu = Average()
+        self._exact_match_accuracy = Average()
 
         if dropout > 0:
             self._dropout = torch.nn.Dropout(p=dropout)
@@ -152,7 +153,7 @@ class JavaSemanticParser(Model):
         # print("utterance weight", self._utterance_embedder._token_embedders['tokens'].weight.size())
         # exit()
         initial_score = Variable(embedded_utterance.data.new(batch_size).fill_(0))
-        _, action_indices = self._embed_actions(actions)
+        _, actionidx2vocabidx = self._embed_actions(actions)
 
         linking_features = java_class['linking']
         linking_scores = self._linking_params(linking_features).squeeze(3)
@@ -193,7 +194,7 @@ class JavaSemanticParser(Model):
                                          rnn_state=initial_rnn_state,
                                          grammar_state=initial_grammar_state,
                                          # action_embeddings=action_embeddings,
-                                         action_indices=action_indices,
+                                         action_indices=actionidx2vocabidx,
                                          possible_actions=actions,
                                          flattened_linking_scores=flattened_linking_scores,
                                          actions_to_entities=actions_to_entities,
@@ -236,21 +237,28 @@ class JavaSemanticParser(Model):
 
             for i in range(batch_size):
                 if i in best_final_states:
-                    credit = 0
+                    em = 0
+                    partial_parse_acc = 0
                     bleu = 0
                     pred_rules = self._get_rules_from_action_history(best_final_states[i][0].action_history[0], actions[i])
                     if rules is not None:
                         # todo(rajas): average action history function could
                         # become a one liner with pred_rules and targ_rules
-                        credit = self._average_action_history_match(best_final_states[i][0].action_history[0], rules[i])
+                        partial_parse_acc = self._average_action_history_match(best_final_states[i][0].action_history[0], rules[i])
                         targ_action_history = rules[i].long().data.cpu().numpy().tolist()
                         targ_rules = self._get_rules_from_action_history(targ_action_history, actions[i])
 
-                        bleu = self._get_bleu(code[i], self._gen_code_from_rules(pred_rules))
-                        self._log_code(code[i], targ_rules, pred_rules, i)
+                        pred_code = self._gen_code_from_rules(pred_rules)
 
-                    self._action_sequence_accuracy(credit)
+                        bleu = self._get_bleu(code[i], pred_code)
+                        self._log_code(code[i], pred_rules, i)
+                        if pred_code == code[i]:
+                            em = 1
+
+
+                    self._partial_production_rule_accuracy(partial_parse_acc)
                     self._code_bleu(bleu)
+                    self._exact_match_accuracy(em)
                     outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history[0])
 
                     outputs['best_action_sequence'].append(pred_rules)
@@ -302,7 +310,10 @@ class JavaSemanticParser(Model):
 
     @staticmethod
     def _get_bleu(gold_seq, pred_seq):
-        return sentence_bleu(gold_seq, pred_seq)
+        # This is how Ling et al. compute bleu score.
+        sm = SmoothingFunction()
+        ngram_weights = [0.25] * min(4, len(gold_seq))
+        return sentence_bleu([gold_seq], pred_seq, weights=ngram_weights, smoothing_function=sm.method3)
 
     @staticmethod
     def _average_action_history_match(predicted: List[int], targets: torch.LongTensor) -> int:
@@ -376,7 +387,7 @@ class JavaSemanticParser(Model):
             f.write(target_rules[i] + ", " + predicted_rules[i] + '\n')
         f.close()
 
-    def _log_code(self, real_target_code, target_rules, predicted_rules, batch):
+    def _log_code(self, real_target_code, predicted_rules, batch):
         codef = open('debug/pred_target_code.txt', 'a')
         codef.write("batch, " + str(batch) + '\n')
 
@@ -394,12 +405,14 @@ class JavaSemanticParser(Model):
 
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         return {
-            'parse_acc': self._action_sequence_accuracy.get_metric(reset),
-            'bleu': self._code_bleu.get_metric(reset)
+            'bleu': self._code_bleu.get_metric(reset),
+            'em': self._exact_match_accuracy.get_metric(reset),
+            'partial_acc': self._partial_production_rule_accuracy.get_metric(reset)
+
         }
 
     @staticmethod
-    # @timeit
+    @timeit
     def _create_grammar_state(possible_actions: List[ProductionRuleArray]) -> JavaGrammarState:
         # valid_actions = world.get_valid_actions()
         # action_mapping = {}
@@ -417,7 +430,7 @@ class JavaSemanticParser(Model):
             nonterminal2action_index[lhs].append(i)
         return JavaGrammarState([START_SYMBOL], nonterminal2action_index)
 
-    # @timeit
+    @timeit
     def _embed_actions(self, actions: List[List[ProductionRuleArray]]) -> Tuple[torch.Tensor,
                                                                                 Dict[Tuple[int, int], int]]:
         """
@@ -443,6 +456,7 @@ class JavaSemanticParser(Model):
         # going over all of the actions for each batch instance so we can map them to the global
         # action ids.
         action_vocab = self.vocab.get_token_to_index_vocabulary(self._rule_namespace)
+        # todo(rajas): optimize the code to stop at global actions and repeat for each batch
         action_map: Dict[Tuple[int, int], int] = {}
         for batch_index, instance_actions in enumerate(actions):
             for action_index, action in enumerate(instance_actions):
@@ -454,7 +468,7 @@ class JavaSemanticParser(Model):
         return embedded_actions, action_map
 
     @staticmethod
-    # @timeit
+    @timeit
     def _map_entity_productions(linking_scores: torch.FloatTensor,
                                 batch_entities: List[Set[str]],
                                 actions: List[List[ProductionRuleArray]]) -> Tuple[torch.Tensor,
