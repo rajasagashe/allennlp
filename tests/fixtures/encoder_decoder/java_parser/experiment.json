@@ -64,7 +64,7 @@
   "trainer": {
     "num_epochs": 2,
     "patience": 10,
-    "validation_metric": "+parse_acc",
+    "validation_metric": "+bleu",
     "cuda_device": -1,
     "optimizer": {
       "type": "adam",

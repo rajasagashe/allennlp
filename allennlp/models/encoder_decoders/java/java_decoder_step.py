@@ -89,6 +89,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # Each new state corresponds to one valid action that can be taken from the current state,
         # and they are ordered by their probability of being selected.
 
+        print('Starting take step --------')
         take_step_start = time.time()
         attended_question = torch.stack([rnn_state.attended_input for rnn_state in state.rnn_state])
         hidden_state = torch.stack([rnn_state.hidden_state for rnn_state in state.rnn_state])
@@ -232,7 +233,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         return attended_question, question_attention_weights
 
     @staticmethod
-    @timeit
+    # @timeit
     def _get_actions_to_consider(state: JavaDecoderState) -> Tuple[List[List[int]],
                                                                          List[List[int]],
                                                                          List[List[int]]]:
@@ -355,6 +356,19 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 allowed_action = allowed_action_indices[group_index]
                 # Logits will be padded by num_embedded_actions so we add
                 # that.
+                # print('====')
+                # print('embedded actions', embedded_actions[group_index])
+                # # print(len(embedded_actions), len(linked_actions))
+                # print('group index', group_index)
+                # print('logit_index', logit_index)
+                # print('allowed_action', allowed_action)
+                # print('valid_actions', valid_actions[group_index])
+                # print('nonterminal', state.grammar_state[group_index]._nonterminal_stack[-4:])
+                # print(state.grammar_state[group_index]._action_history)
+                # print(state.possible_actions[group_index][allowed_action][0])
+                # print('linked actions', linked_actions[group_index])
+                # print(embedded_actions[group_index][0])
+
                 logit_index = num_embedded_actions + linked_actions[group_index].index(allowed_action)
                 allowed_logit_indices[group_index] = logit_index
 
@@ -390,10 +404,15 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         """
         num_actions = [len(action_list) for action_list in actions_to_embed]
         max_num_actions = max(num_actions)
+        start_pad = time.time()
         padded_actions = [common_util.pad_sequence_to_length(action_list, max_num_actions)
                           for action_list in actions_to_embed]
         # Shape: (group_size, num_actions)
+        end_pad = time.time()
         action_tensor = Variable(state.score[0].data.new(padded_actions).long())
+        end_copy = time.time()
+        print('Time to pad actions to embed', (end_pad-start_pad) *1000)
+        print('Time to put pad actions on variable', (end_copy-end_pad) *1000)
         # `state.action_embeddings` is shape (total_num_actions, action_embedding_dim).
         # We want to select from state.action_embeddings using `action_tensor` to get a tensor of
         # shape (group_size, num_actions, action_embedding_dim).  Unfortunately, the index_select
@@ -406,7 +425,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
         # flattened_action_embeddings = state.action_embeddings.index_select(0, flattened_actions)
         # action_embeddings = flattened_action_embeddings.view(group_size, max_num_actions, action_embedding_dim)
+        start_embed = time.time()
         action_embeddings = self._action_embedder(action_tensor)
+        end_embed = time.time()
+        print('Time to embed the action', (end_embed-start_embed)*1000)
         sequence_lengths = Variable(action_embeddings.data.new(num_actions))
         action_mask = util.get_mask_from_sequence_lengths(sequence_lengths, max_num_actions)
         return action_embeddings, action_mask
@@ -533,7 +555,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         memory_cell = [x.squeeze(0) for x in memory_cell.split(1, 0)]
         attended_question = [x.squeeze(0) for x in attended_question.split(1, 0)]
         end1 = time.time()
-        # print('compute new states split time', (end1-start1) * 1000)
 
         start_sort_iter = time.time()
         sorted_log_probs, sorted_actions = log_probs.sort(dim=-1, descending=True)
@@ -661,9 +682,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             # update the scores
             batch_index = state.batch_indices[group_index]
             new_action_history = state.action_history[group_index] + [allowed_action_index]
-            print(allowed_logit_indices)
-            print(log_probs_index)
-            print(log_probs.size())
+
             new_score = state.score[group_index] + log_probs[group_index, log_probs_index]
 
             production_rule = state.possible_actions[batch_index][allowed_action_index][0]

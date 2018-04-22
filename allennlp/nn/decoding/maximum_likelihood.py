@@ -40,7 +40,7 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
             # end = time.time() - start
             # print("Time to combine states", end)
 
-            allowed_actions = self._get_allowed_actions(grouped_state, step_num, batch_rules)
+            allowed_action_indices = self._get_allowed_actions(grouped_state, step_num, batch_rules)
             step_num += 1
 
 
@@ -48,7 +48,7 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
             # against the allowed actions to make sure we're actually scoring all of the actions we
             # are supposed to.
             actions_taken: Set[Tuple[int, Tuple[int, ...]]] = set()
-            for next_state in decode_step.take_step(grouped_state, allowed_actions=allowed_actions):
+            for next_state in decode_step.take_step(grouped_state, allowed_actions=allowed_action_indices):
                 actions_taken.add((next_state.batch_indices[0], tuple(next_state.action_history[0])))
                 if next_state.is_finished():
                     finished_states.append(next_state)
