@@ -48,7 +48,12 @@ class JavaGrammarState:
 
         right_side_list = right_side.split('___')
         right_side_list.reverse()
-        new_stack = new_stack + right_side_list
+        if left_side != 'IdentifierNT':
+            # IdentifierNT can expand to names which look like nonterminals.
+            # For example the production rule IdentifierNT-->Expression is in
+            # the dataset. Thus, when the lhs is IdentifierNT, we don't push
+            # the rhs on, and this is ok since the rhs is always a terminal.
+            new_stack = new_stack + right_side_list
 
         # now consume the terminals added to the stack
         nonterminals = self._valid_actions.keys()
