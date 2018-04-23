@@ -24,9 +24,13 @@ class JavaGrammarState:
         # return not self._nonterminal_stack
 
     def number_nonterminals_in_rhs(self, production_rule: str):
-        _, rhs = production_rule.split('-->')
-        rhs_elements = rhs.split('___')
-        return sum((element in self._valid_actions.keys()) for element in rhs_elements)
+        # todo(rajas): add better checks to guarantee that 0 returned
+        # for a rule where rhs are all terminals
+        lhs, rhs = production_rule.split('-->')
+        if lhs != 'IdentifierNT':
+            rhs_elements = rhs.split('___')
+            return sum((element in self._valid_actions.keys()) for element in rhs_elements)
+        return 0
 
     def get_valid_actions(self) -> List[int]:
         """
