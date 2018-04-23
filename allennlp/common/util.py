@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 JsonDict = Dict[str, Any]  # pylint: disable=invalid-name
 
-debug = False
+debug = True
 def debug_print(*args):
     if debug:
         print(*args)

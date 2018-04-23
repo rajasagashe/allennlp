@@ -6,6 +6,8 @@ import time
 import torch
 from torch.autograd import Variable
 
+from allennlp.common.util import timeit, debug_print
+
 from allennlp.nn.decoding.decoder_step import DecoderStep
 from allennlp.nn.decoding.decoder_state import DecoderState
 from allennlp.nn.decoding.decoder_trainer import DecoderTrainer
@@ -25,12 +27,13 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
         # targets, target_mask = supervision
         # allowed_transitions = self._create_allowed_transitions(targets, target_mask)
         finished_states = []
+        finished_scores = []
         states = [initial_state]
         step_num = 0
         while states:
             # allowed_actions = [rules[step_num].data.cpu().numpy().tolist()[0] for rules in batch_rules]
 
-            # print("Step num", step_num, "-------------")
+            debug_print("Step num", step_num, "-------------")
             # print(batch_rules)
             next_states = []
             # We group together all current states to get more efficient (batched) computation.
@@ -47,14 +50,28 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
             # This will store a set of (batch_index, action_history) tuples, and we'll check it
             # against the allowed actions to make sure we're actually scoring all of the actions we
             # are supposed to.
-            actions_taken: Set[Tuple[int, Tuple[int, ...]]] = set()
+            # actions_taken: Set[Tuple[int, Tuple[int, ...]]] = set()
             for next_state in decode_step.take_step(grouped_state, allowed_actions=allowed_action_indices):
-                actions_taken.add((next_state.batch_indices[0], tuple(next_state.action_history[0])))
+                # actions_taken.add((next_state.batch_indices[0], tuple(next_state.action_history[0])))
                 if next_state.is_finished():
-                    finished_states.append(next_state)
+                    # todo(rajas): collect scores here and delete state
+                    finished_scores.append(next_state.score)
+                    # finished_states.append(next_state)
+                    for i, rnnstate in enumerate(next_state.rnn_state):
+                        if len(rnnstate.parent_states) != 0:
+                            print(next_state.action_history[i])
+                            print(next_state.grammar_state[i].action_history)
+                            exit()
+                    for rnnstate in next_state.rnn_state:
+                        del rnnstate.hidden_state
+                        del rnnstate.encoder_outputs
+                        del rnnstate.parent_states
+                        del rnnstate.memory_cell
+                        del rnnstate.encoder_output_mask
+                        del rnnstate.previous_action_embedding
+                    del next_state
                 else:
                     next_states.append(next_state)
-            # print(states[0].grammar_state[0].)
             states = next_states
 
         # This is a dictionary of lists - for each batch instance, we want the score of all
@@ -68,11 +85,22 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
         #         exit()
         #     loss += -state.score[0] / len(state.action_history)
 
-        batch_scores = self._group_scores_by_batch(finished_states)
+
         loss = 0
-        for score in batch_scores.values():  # we don't care about the batch index, just the scores
+        for score in finished_scores:  # we don't care about the batch index, just the scores
             loss += -score[0]
-        return {'loss': loss / len(finished_states)}
+        return {'loss': loss / len(finished_scores)}
+        # batch_scores = self._group_scores_by_batch(finished_states)
+        # loss = 0
+        # for score in batch_scores.values():  # we don't care about the batch index, just the scores
+        #     loss += -score[0]
+        # return {'loss': loss / len(finished_states)}
+
+        # for state in finished_states:
+        #     debug_print("parent states", len(state.rnn_state[0].parent_states))
+        #     del state.rnn_state
+        #     del state.flattened_linking_scores
+
 
     @staticmethod
     def _get_allowed_actions(state: DecoderState, step_num: int, batch_rules):

@@ -412,6 +412,30 @@ class JavaSemanticParser(Model):
 
         }
 
+    def print_gbc(self):
+        print('Printing gbc')
+        num_tensors = 0
+        sum_sizes = 0
+        tensor_size_counter = Counter()
+        for obj in gc.get_objects():
+            try:
+                if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                    num_tensors += 1
+                    size = 1
+                    for dim in list(obj.size()):
+                        size *= dim
+                    sum_sizes += size
+                    obj_key = str(type(obj)) + str(list(obj.size()))
+                    tensor_size_counter[obj_key] = size
+                    # print(type(obj), obj.size())
+            except:
+                y = 3
+        print('Num tensors', num_tensors)
+        print('Total size', sum_sizes)
+        print('Total size mb', (sum_sizes*4)/(1024*1024))
+        print('Largest tensors', tensor_size_counter.most_common(30))
+
+
     @staticmethod
     @timeit
     def _create_grammar_state(possible_actions: List[ProductionRuleArray]) -> JavaGrammarState:

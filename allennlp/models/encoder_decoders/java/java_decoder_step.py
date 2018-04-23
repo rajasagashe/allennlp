@@ -1,7 +1,8 @@
-from collections import defaultdict
+from collections import defaultdict, Counter
 from typing import Dict, List, Set, Tuple
 
 import time
+import gc
 from overrides import overrides
 
 import numpy as np
@@ -27,7 +28,6 @@ from allennlp.models.encoder_decoders.java.java_decoder_state import JavaDecoder
 # from java_programmer.allennlp_in_progress.rnn_state import RnnState
 # from allennlp.nn.decoding import DecoderStep, RnnState
 
-
 class JavaDecoderStep(DecoderStep[JavaDecoderState]):
     def __init__(self,
                  encoder_output_dim: int,
@@ -44,6 +44,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
         self._identifier_literal_action_embedding = torch.nn.Parameter(torch.FloatTensor(action_embedding_dim))
         torch.nn.init.normal(self._identifier_literal_action_embedding)
+
         # self._num_start_types = num_start_types
         # self._start_type_predictor = Linear(encoder_output_dim, num_start_types)
 
@@ -108,6 +109,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                                 parent_action_embedding], -1))
 
         hidden_state, memory_cell = self._decoder_cell(decoder_input, (hidden_state, memory_cell))
+        del decoder_input
         hidden_state = self._dropout(hidden_state)
 
         # (group_size, encoder_output_dim)
@@ -116,7 +118,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         attended_question, attention_weights = self.attend_on_question(hidden_state,
                                                                        encoder_outputs,
                                                                        encoder_output_mask.float())
-
+        del encoder_output_mask
 
         # To predict an action, we'll use a concatenation of the hidden state and attention over
         # the question.  We'll just predict an _embedding_, which we will compare to embedded
@@ -142,6 +144,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # `bmm` and some squeezing.
         # Shape: (group_size, num_embedded_actions)
         embedded_action_logits = action_embeddings.bmm(predicted_action_embedding.unsqueeze(-1)).squeeze(-1)
+        del predicted_action_embedding
 
         if actions_to_link:
             # entity_action_logits: (group_size, num_entity_actions)
@@ -166,14 +169,18 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 embedded_action_probs = util.masked_log_softmax(embedded_action_logits,
                                                                 embedded_action_mask.float()) + mix2
                 log_probs = torch.cat([embedded_action_probs, entity_action_probs], dim=1)
+                del embedded_action_mask
+                del entity_action_mask
             else:
                 action_logits = torch.cat([embedded_action_logits, entity_action_logits], dim=1)
                 action_mask = torch.cat([embedded_action_mask, entity_action_mask], dim=1).float()
                 log_probs = util.masked_log_softmax(action_logits, action_mask)
+                del action_mask
         else:
             action_logits = embedded_action_logits
             action_mask = embedded_action_mask.float()
             log_probs = util.masked_log_softmax(action_logits, action_mask)
+            del action_mask
 
         take_step_end = time.time()
         debug_print("Time for take step", (take_step_end - take_step_start)* 1000)
@@ -181,7 +188,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         if allowed_actions is not None:
             # This method is slow but integrates well with beam search, so use it
             # for inference.
-            return self._compute_new_states_optimized(state,
+            x = self._compute_new_states_optimized(state,
                                                       log_probs,
                                                       hidden_state,
                                                       memory_cell,
@@ -190,6 +197,9 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                       allowed_actions,
                                                       self._identifier_literal_action_embedding,
                                                       allowed_logit_indices)
+
+            del action_embeddings
+            return x
 
         else:
             return self._compute_new_states(state,
@@ -406,15 +416,46 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         debug_print('Time to pad actions to embed', (end_pad-start_pad) *1000)
         debug_print('Time to put pad actions on variable', (end_copy-end_pad) *1000)
         debug_print('action_tensor', action_tensor.size())
+        debug_print('action_embedder', self._action_embedder.weight.size())
 
         start_embed = time.time()
-        action_embeddings = self._action_embedder(action_tensor)
+        try:
+            action_embeddings = self._action_embedder(action_tensor)
+        except:
+            self.print_gbc()
+            exit()
+
+        del action_tensor
         end_embed = time.time()
         debug_print('Time to embed the action', (end_embed-start_embed)*1000)
 
         sequence_lengths = Variable(action_embeddings.data.new(num_actions))
         action_mask = util.get_mask_from_sequence_lengths(sequence_lengths, max_num_actions)
+        del sequence_lengths
         return action_embeddings, action_mask
+
+    def print_gbc(self):
+        print('Printing gbc')
+        num_tensors = 0
+        sum_sizes = 0
+        tensor_size_counter = Counter()
+        for obj in gc.get_objects():
+            try:
+                if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                    num_tensors += 1
+                    size = 1
+                    for dim in list(obj.size()):
+                        size *= dim
+                    sum_sizes += size
+                    obj_key = str(type(obj)) + str(list(obj.size()))
+                    tensor_size_counter[obj_key] = size
+                    # print(type(obj), obj.size())
+            except:
+                y = 3
+        print('Num tensors', num_tensors)
+        print('Total size', sum_sizes)
+        print('Total size mb', (sum_sizes*4)/(1024*1024))
+        print('Largest tensors', tensor_size_counter.most_common(30))
 
     # @timeit
     def _get_entity_action_logits(self,
@@ -676,12 +717,20 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 action_embedding = identifier_literal_action_embedding
             else:
                 # todo(rajas) confirm the log_probs index is correct here
-                action_embedding = action_embeddings[group_index, log_probs_index, :]
+                indices = Variable(hidden_state[0].data.new([log_probs_index])).long()
+                action_embedding = torch.index_select(action_embeddings[group_index], 0, indices)
+                del indices
+                action_embedding = action_embedding.squeeze(0)
+                # action_embedding_temp = action_embeddings[group_index, log_probs_index, :]
+
 
             # Pop the old parent states and push the new ones one num nonterminals times since
             # each of the nonterminals will use it.
             new_parent_states = [p for p in state.rnn_state[group_index].parent_states]
-            new_parent_states.pop()
+            # todo(rajas): remove this del
+            temp = new_parent_states.pop()
+            del temp
+
             num_nonterminals_in_rhs = new_grammar_state.number_nonterminals_in_rhs(production_rule)
             new_parent_states = new_parent_states + ([action_embedding] * num_nonterminals_in_rhs)
 
@@ -698,7 +747,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                          score=[new_score],
                                          rnn_state=[new_rnn_state],
                                          grammar_state=[new_grammar_state],
-                                         # action_embeddings=state.action_embeddings,
                                          action_indices=state.action_indices,
                                          possible_actions=state.possible_actions,
                                          flattened_linking_scores=state.flattened_linking_scores,
@@ -707,5 +755,5 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                          debug_info=None)
             new_states.append(new_state)
 
-
+        del action_embeddings
         return new_states
