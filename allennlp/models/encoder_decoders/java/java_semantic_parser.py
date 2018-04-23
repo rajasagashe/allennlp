@@ -1,10 +1,8 @@
 import json
-from collections import defaultdict
+from collections import defaultdict, Counter
 from typing import Dict, Tuple, List, Set, Any
-
+import gc
 import re
-
-import time
 
 from allennlp.training.metrics import Average
 from overrides import overrides
@@ -14,6 +12,7 @@ from torch.autograd import Variable
 from torch.nn.modules.rnn import LSTMCell
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 
+from allennlp.common.util import timeit, debug_print
 from allennlp.common import Params
 from allennlp.common.util import timeit
 from allennlp.data.vocabulary import Vocabulary
@@ -150,7 +149,7 @@ class JavaSemanticParser(Model):
         memory_cell = Variable(encoder_outputs.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
 
         # print("utterance weight", self._utterance_embedder._token_embedders)
-        # print("utterance weight", self._utterance_embedder._token_embedders['tokens'].weight.size())
+        debug_print("utterance weight", self._utterance_embedder._token_embedders['tokens'].weight.size())
         # exit()
         initial_score = Variable(embedded_utterance.data.new(batch_size).fill_(0))
         _, actionidx2vocabidx = self._embed_actions(actions)
@@ -249,10 +248,11 @@ class JavaSemanticParser(Model):
                         targ_rules = self._get_rules_from_action_history(targ_action_history, actions[i])
 
                         pred_code = self._gen_code_from_rules(pred_rules)
+                        targ_code = code[i]['code']
 
-                        bleu = self._get_bleu(code[i], pred_code)
-                        self._log_code(code[i], pred_rules, i)
-                        if pred_code == code[i]:
+                        bleu = self._get_bleu(targ_code, pred_code)
+                        self._log_code(targ_code, pred_rules, i)
+                        if pred_code == targ_code:
                             em = 1
 
 
@@ -334,6 +334,7 @@ class JavaSemanticParser(Model):
         targets_trimmed = targets[:min_length].long()
 
         correct_tensor = targets_trimmed.eq(predicted_tensor)
+        del predicted_tensor
         num_correct = torch.sum(correct_tensor)
         num_correct = num_correct.data.cpu().numpy().tolist()[0]
         return num_correct / max_length
@@ -401,7 +402,7 @@ class JavaSemanticParser(Model):
         print('Prediction====')
         print(' '.join(predicted_code) + '')
         print('Target========')
-        print(' '.join(real_target_code['code']) + '')
+        print(' '.join(real_target_code) + '')
 
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         return {
