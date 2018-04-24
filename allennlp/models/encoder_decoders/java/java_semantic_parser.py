@@ -119,15 +119,15 @@ class JavaSemanticParser(Model):
     # @timeit
     def forward(self,  # type: ignore
                 utterance: Dict[str, torch.LongTensor],
-                # variable_names: Dict[str, torch.LongTensor],
-                # variable_types: Dict[str, torch.LongTensor],
-                # method_names: Dict[str, torch.LongTensor],
-                # method_return_types: Dict[str, torch.LongTensor],
+                variable_names: Dict[str, torch.LongTensor],
+                variable_types: Dict[str, torch.LongTensor],
+                method_names: Dict[str, torch.LongTensor],
+                method_return_types: Dict[str, torch.LongTensor],
                 actions: List[List[ProductionRuleArray]],
                 java_class: Dict[str, torch.LongTensor],
                 entities: List[Set[str]],
                 rules: List[torch.Tensor] = None,
-                code: List[Dict[str, str]] = None
+                metadata: List[Dict[str, str]] = None
                 ) -> Dict[str, torch.Tensor]:
 
         # Encode summary, variables, methods with bi lstm.
@@ -248,10 +248,10 @@ class JavaSemanticParser(Model):
                         targ_rules = self._get_rules_from_action_history(targ_action_history, actions[i])
 
                         pred_code = self._gen_code_from_rules(pred_rules)
-                        targ_code = code[i]['code']
+                        targ_code = metadata[i]['code']
 
                         bleu = self._get_bleu(targ_code, pred_code)
-                        self._log_code(targ_code, pred_rules, i)
+                        self._log_predictions(metadata[i], pred_code, i)
                         if pred_code == targ_code:
                             em = 1
 
@@ -388,21 +388,29 @@ class JavaSemanticParser(Model):
             f.write(target_rules[i] + ", " + predicted_rules[i] + '\n')
         f.close()
 
-    def _log_code(self, real_target_code, predicted_rules, batch):
+    def _log_predictions(self, metadata, pred_code, batch):
         codef = open('debug/pred_target_code.txt', 'a')
         codef.write("batch, " + str(batch) + '\n')
 
-        predicted_code = self._gen_code_from_rules(predicted_rules)
-        # codef.write('Target\n')
-        # codef.write(' '.join(real_target_code['code']) + '\n')
-        # codef.write('Prediction\n')
-        # codef.write(' '.join(predicted_code) + '\n\n')
-        # codef.close()
-        print('==============' * 4)
-        print('Prediction====')
-        print(' '.join(predicted_code) + '')
-        print('Target========')
-        print(' '.join(real_target_code) + '')
+        log = '==============' * 4 + '\n'
+        log += 'NL:' + ' '.join(metadata['utterance']) + '\n'
+        log += 'Variables:\n'
+        log += self.combine_name_types(metadata['variableNames'], metadata['variableTypes'])
+        log += 'Methods:\n'
+        log += self.combine_name_types(metadata['methodNames'], metadata['methodTypes'])
+        log += 'Target========\n'
+        log += ' '.join(metadata['code']) + '\n'
+        log += 'Prediction====\n'
+        log += ' '.join(pred_code) + '\n'
+        print(log)
+        codef.write(log)
+        codef.close()
+
+    def combine_name_types(self, names, types):
+        combine_str = ""
+        for n, t in zip(names, types):
+            combine_str += n + ' (' + t + ')\n'
+        return combine_str
 
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         return {
