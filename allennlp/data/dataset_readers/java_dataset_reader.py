@@ -21,7 +21,11 @@ from allennlp.data.tokenizers import Token, Tokenizer, WordTokenizer
 from allennlp.semparse import KnowledgeGraph
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
-LITERALS_TO_TRIM = ["IdentifierNT", "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
+IdentifierNT = 'IdentifierNT'
+IdentifierOther = IdentifierNT + 'Other'
+# LITERALS_TO_TRIM = [IdentifierNT, "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
+IDENTIFIER_TYPES = ['Primary', 'ClassOrInterfaceType', 'Nt_33']
+LITERALS_TO_TRIM = [IdentifierNT+IDENTIFIER_TYPES[0], IdentifierNT+IDENTIFIER_TYPES[1], IdentifierNT+IDENTIFIER_TYPES[2], IdentifierOther, "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
 
 @DatasetReader.register("java")
 class JavaDatasetReader(DatasetReader):
@@ -56,11 +60,11 @@ class JavaDatasetReader(DatasetReader):
         if self._num_dataset_instances != -1:
             dataset = dataset[0:self._num_dataset_instances]
 
-        global_production_rule_fields, global_rule2index = self.get_global_rule_fields(dataset)
-
+        modified_rules = self.split_identifier_rule_into_multiple(dataset)
+        global_production_rule_fields, global_rule2index = self.get_global_rule_fields(modified_rules)
 
         logger.info("Reading the dataset")
-        for record in dataset:
+        for i, record in enumerate(dataset):
             instance = self.text_to_instance(record['nl'],
                                              record['varNames'],
                                              record['varTypes'],
@@ -69,13 +73,40 @@ class JavaDatasetReader(DatasetReader):
                                              global_production_rule_fields,
                                              global_rule2index,
                                              record['code'],
-                                             record['rules']
-                                             )
+                                             # Pass the modified identifier rules.
+                                             modified_rules[i])
             yield instance
 
-    def get_global_rule_fields(self, dataset):
+    def split_identifier_rule_into_multiple(self, dataset):
+        """ The identifier rule is split based on parent state prefix to cut down the
+        search space"""
+
+        IDENTIFIER_TYPES = ['Primary', 'ClassOrInterfaceType', 'Nt_33']
+        new_rules = []
+        for d in dataset:
+            stack = []
+            new_rules.append([])
+            for rule in d['rules']:
+                lhs, rhs = rule.split('-->')
+                if IdentifierNT in rhs:
+                    stack.append(lhs)
+                    if lhs in IDENTIFIER_TYPES:
+                        new_rules[-1].append(rule.replace(IdentifierNT, IdentifierNT + lhs))
+                    else:
+                        new_rules[-1].append(rule.replace(IdentifierNT, IdentifierOther))
+                elif IdentifierNT in lhs:
+                    nt = stack.pop()
+                    if nt in IDENTIFIER_TYPES:
+                        new_rules[-1].append(IdentifierNT+nt+'-->'+rhs)
+                    else:
+                        new_rules[-1].append(IdentifierOther + '-->' + rhs)
+                else:
+                    new_rules[-1].append(rule)
+        return new_rules
+
+    def get_global_rule_fields(self, rules):
         # Prepare global production rules to be used in JavaGrammarState.
-        lhs2all_rhs = self.trim_grammar_identifiers_literals(dataset)
+        lhs2all_rhs = self.trim_grammar_identifiers_literals(rules)
 
         # Converts all the rules into ProductionRuleFields and returns a dictionary
         # from the rule to its index in the ListField of ProductionRuleFields.
@@ -85,7 +116,7 @@ class JavaDatasetReader(DatasetReader):
         index = 0
         for lhs, all_rhs in lhs2all_rhs.items():
             for rhs in all_rhs:
-                rule = lhs + '-->' + '___'.join(rhs)
+                rule = lhs + '-->' + rhs
                 if 'sriniclass' in rule or 'srinifunc' in rule:
                     # Names from environment shouldn't be added to global rules.
                     continue
@@ -110,11 +141,10 @@ class JavaDatasetReader(DatasetReader):
                          ) -> Instance:
         fields = {}
 
-        variable_name_fields = self.get_field_from_method_variable_names(variable_names)
-        method_name_fields = self.get_field_from_method_variable_names(method_names)
-
-        variable_types_field = TextField([Token(t.lower()) for t in variable_types], self._type_indexers)
-        method_return_types_field = TextField([Token(t.lower()) for t in method_types], self._type_indexers)
+        # variable_name_fields = self.get_field_from_method_variable_names(variable_names)
+        # method_name_fields = self.get_field_from_method_variable_names(method_names)
+        # variable_types_field = TextField([Token(t.lower()) for t in variable_types], self._type_indexers)
+        # method_return_types_field = TextField([Token(t.lower()) for t in method_types], self._type_indexers)
 
 
         # todo(rajas) add camel casing for utterance tokens as well
@@ -164,10 +194,10 @@ class JavaDatasetReader(DatasetReader):
         entity_field = MetadataField(knowledge_graph.entities)
 
         fields.update({"utterance": utterance_field,
-                       "variable_names": variable_name_fields,
-                       "variable_types": variable_types_field,
-                       "method_names": method_name_fields,
-                       "method_return_types": method_return_types_field,
+                       # "variable_names": variable_name_fields,
+                       # "variable_types": variable_types_field,
+                       # "method_names": method_name_fields,
+                       # "method_return_types": method_return_types_field,
                        "actions": ListField(global_rule_fields + environment_rules),
                        "java_class": java_class_field,
                        "entities": entity_field })
@@ -176,47 +206,47 @@ class JavaDatasetReader(DatasetReader):
 
 
 
-    def trim_grammar_identifiers_literals(self, dataset):
+    def trim_grammar_identifiers_literals(self, rules_list):
         # This is used remove identifier and literal rules, if they occur below
         # a self._min_identifier_count. This is needed since the action_indexer
         # indexes the entire rule, so instead of having it map the entire rule
         # to an unk we want the rule to become Identifier-->UNK
 
         # First get all unique rhsides and their counts.
-        lhs2unique_rhs = defaultdict(set)
-        rhs_token2count = Counter()
-        for record in dataset:
-            rules = record['rules']
+        lhs2rhscounts = defaultdict(Counter)
+        for rules in rules_list:
             for rule in rules:
                 lhs, rhs = rule.split('-->')
-                rhs_tokens = rhs.split('___')
-                lhs2unique_rhs[lhs].add(tuple(rhs_tokens))
-                rhs_token2count.update(rhs_tokens)
-        for lhs in lhs2unique_rhs:
-            # We only trim from a predefined set of identifiers and literals. This means that
-            # some literals aren't trimmed, but that's because the expand to a small set of
-            # terminals so it's not necessary.
+                lhs2rhscounts[lhs][rhs] += 1
+
+        lhs2trimmedrhs = defaultdict(list)
+        for lhs in lhs2rhscounts:
+            # We only trim from a predefined set of identifiers and literals. This
+            # means that some literals aren't trimmed, but that's because the
+            # expand to a small set of terminals so it's not necessary.
             if lhs in LITERALS_TO_TRIM:
-                unique_rhs = lhs2unique_rhs[lhs]
-                trimmed_rhs = []
-                for rhs_tup in unique_rhs:
-                    # We assume that the identifier and literal right hand sides
-                    # will only have one value in the tuple.
-                    if rhs_token2count[rhs_tup[0]] >= self._min_identifier_count:
-                        trimmed_rhs.append(rhs_tup)
-                lhs2unique_rhs[lhs] = trimmed_rhs
+                for rhs, count in lhs2rhscounts[lhs].items():
+                    if count >= self._min_identifier_count:
+                        lhs2trimmedrhs[lhs].append(rhs)
+            else:
+                for rhs, _ in lhs2rhscounts[lhs].items():
+                    lhs2trimmedrhs[lhs].append(rhs)
 
         # Now add the unk rules for each literal
-        for trimmed_nonterminal in LITERALS_TO_TRIM:
-            if trimmed_nonterminal in lhs2unique_rhs:
-                lhs2unique_rhs[trimmed_nonterminal].append(tuple(['<UNK>']))
-        return lhs2unique_rhs
+        for nt in LITERALS_TO_TRIM:
+            # if nt in lhs2trimmedrhs:
+            # We could check first whether any trimming occurred, but this
+            # is guaranteed to happen so we add unk by default.
+            lhs2trimmedrhs[nt].append('<UNK>')
+
+        return lhs2trimmedrhs
 
 
     def get_java_class_knowledge_graph(self, method_names, variable_names):
         # Note that sriniclass_ prefix means that the name is copied from the
         # java class.
         # todo(rajas): add a class field for sriniclass and srinifunc
+        # todo(rajas): add types to this graph as well
         entities = []
         entity_text = {}
         for name in (variable_names):
@@ -237,11 +267,21 @@ class JavaDatasetReader(DatasetReader):
         # and method names from the java class.
         java_class_rules = []
         javaclassrule2index = {}
-        for i, entity in enumerate(knowledge_graph.entities):
-            rule = 'IdentifierNT-->' + entity
-            field = ProductionRuleField(rule, is_global_rule=False)
-            java_class_rules.append(field)
-            javaclassrule2index[rule] = i
+        index = 0
+        for entity in knowledge_graph.entities:
+            # Variable names and method names are only generated from the IdentifierNT rule which
+            # was generated from Primary, Nt_33, and two others. The other two occur less than 10
+            # times so they are omitted.
+            rule1 = IdentifierNT + 'Primary-->' + entity
+            rule2 = IdentifierNT + 'Nt_33-->' + entity
+
+            field1 = ProductionRuleField(rule1, is_global_rule=False)
+            field2 = ProductionRuleField(rule2, is_global_rule=False)
+            java_class_rules.extend([field1, field2])
+
+            javaclassrule2index[rule1] = index
+            javaclassrule2index[rule2] = index + 1
+            index += 2
         return java_class_rules, javaclassrule2index
 
     def get_target_rule_field(self, rules, globalrule2index, environmentrule2index):

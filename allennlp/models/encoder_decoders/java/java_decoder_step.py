@@ -589,7 +589,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 new_grammar_state = state.grammar_state[group_index].take_action(production_rule)
 
                 lhs, _ = production_rule.split('-->')
-                if lhs == 'IdentifierNT' or '_literal' in lhs:
+                if 'IdentifierNT' in lhs or '_literal' in lhs:
                     action_embedding = identifier_literal_action_embedding
                 else:
                     # `action_index` is the index in the _sorted_ tensors, but the action embedding
@@ -672,7 +672,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             new_grammar_state = state.grammar_state[group_index].take_action(production_rule)
 
             lhs, _ = production_rule.split('-->')
-            if lhs == 'IdentifierNT' or '_literal' in lhs:
+            if 'IdentifierNT' in lhs or '_literal' in lhs:
                 action_embedding = identifier_literal_action_embedding
             else:
                 # todo(rajas) confirm the log_probs index is correct here

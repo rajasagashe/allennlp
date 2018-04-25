@@ -3,7 +3,7 @@ from typing import List, Dict, Tuple
 
 from allennlp.data.fields.production_rule_field import ProductionRuleArray
 # from java_programmer.fields.java_production_rule_field import ProductionRuleArray
-
+IdentifierNT = 'IdentifierNT'
 class JavaGrammarState:
     def __init__(self,
                  nonterminal_stack: List[str],
@@ -27,7 +27,7 @@ class JavaGrammarState:
         # todo(rajas): add better checks to guarantee that 0 returned
         # for a rule where rhs are all terminals
         lhs, rhs = production_rule.split('-->')
-        if lhs != 'IdentifierNT':
+        if IdentifierNT not in lhs:
             rhs_elements = rhs.split('___')
             return sum((element in self._valid_actions.keys()) for element in rhs_elements)
         return 0
@@ -52,7 +52,7 @@ class JavaGrammarState:
 
         right_side_list = right_side.split('___')
         right_side_list.reverse()
-        if left_side != 'IdentifierNT':
+        if IdentifierNT not in left_side:
             # IdentifierNT can expand to names which look like nonterminals.
             # For example the production rule IdentifierNT-->Expression is in
             # the dataset. Thus, when the lhs is IdentifierNT, we don't push

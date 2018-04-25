@@ -54,6 +54,58 @@ class TestJavaDatasetReader:
         assert reader.split_camel_case('_compute') == ['_compute']
         assert reader.split_camel_case('LOG') == ['log']
 
+
+    def test_split_identifier_rule_into_multiple(self):
+        reader = JavaDatasetReader.from_params(Params({
+            "utterance_indexers": {"tokens": {"namespace": "utterance"}},
+            "type_indexers": {"tokens": {"namespace": "type"}},
+            "min_identifier_count": 3,
+            "num_dataset_instances": -1,
+            "linking_feature_extractors": [
+                "exact_token_match",
+                "contains_exact_token_match",
+                "edit_distance",
+                "span_overlap_fraction"
+            ]
+        }))
+        dataset = [{'rules':[
+            "MemberDeclaration-->MethodDeclaration",
+            "MethodDeclaration-->TypeTypeOrVoid___IdentifierNT___FormalParameters___MethodBody",
+            "TypeTypeOrVoid-->TypeType",
+            "TypeType-->Nt_41",
+            "Nt_41-->ClassOrInterfaceType",
+            "ClassOrInterfaceType-->IdentifierNT",
+            "IdentifierNT-->File",
+            "IdentifierNT-->function",
+            "FormalParameters-->(___)",
+            "MethodBody-->Block",
+            "Block-->{___Star_26___}",
+            "Star_26-->BlockStatement",
+            "BlockStatement-->Statement",
+            "Statement-->return___Expression___;",
+            "Expression-->Primary",
+            "Primary-->IdentifierNT",
+            "IdentifierNT-->sriniclass_libraryFile"
+        ]}]
+        split_rules = reader.split_identifier_rule_into_multiple(dataset)
+        gold_rules = [['MemberDeclaration-->MethodDeclaration',
+                            'MethodDeclaration-->TypeTypeOrVoid___IdentifierNTOther___FormalParameters___MethodBody',
+                       'TypeTypeOrVoid-->TypeType',
+                       'TypeType-->Nt_41',
+                       'Nt_41-->ClassOrInterfaceType',
+                       'ClassOrInterfaceType-->IdentifierNTClassOrInterfaceType',
+                       'IdentifierNTClassOrInterfaceType-->File',
+                       'IdentifierNTOther-->function',
+                       'FormalParameters-->(___)',
+                       'MethodBody-->Block',
+                       'Block-->{___Star_26___}',
+                       'Star_26-->BlockStatement',
+                       'BlockStatement-->Statement',
+                       'Statement-->return___Expression___;',
+                       'Expression-->Primary',
+                       'Primary-->IdentifierNTPrimary',
+                       'IdentifierNTPrimary-->sriniclass_libraryFile']]
+        assert split_rules == gold_rules
     def test_can_build_from_params(self):
         reader = JavaDatasetReader.from_params(Params({
             "utterance_indexers": {"tokens": {"namespace": "utterance"}},

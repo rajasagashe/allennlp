@@ -119,10 +119,10 @@ class JavaSemanticParser(Model):
     # @timeit
     def forward(self,  # type: ignore
                 utterance: Dict[str, torch.LongTensor],
-                variable_names: Dict[str, torch.LongTensor],
-                variable_types: Dict[str, torch.LongTensor],
-                method_names: Dict[str, torch.LongTensor],
-                method_return_types: Dict[str, torch.LongTensor],
+                # variable_names: Dict[str, torch.LongTensor],
+                # variable_types: Dict[str, torch.LongTensor],
+                # method_names: Dict[str, torch.LongTensor],
+                # method_return_types: Dict[str, torch.LongTensor],
                 actions: List[List[ProductionRuleArray]],
                 java_class: Dict[str, torch.LongTensor],
                 entities: List[Set[str]],
@@ -154,6 +154,7 @@ class JavaSemanticParser(Model):
         initial_score = Variable(embedded_utterance.data.new(batch_size).fill_(0))
         _, actionidx2vocabidx = self._embed_actions(actions)
 
+        # (batch_size, num_entities, num_question_tokens, num_features)
         linking_features = java_class['linking']
         linking_scores = self._linking_params(linking_features).squeeze(3)
 
@@ -341,8 +342,9 @@ class JavaSemanticParser(Model):
 
 
     def _is_terminal_rule(self, rule):
+        lhs, rhs = rule.split('-->')
         return (
-               "IdentifierNT-->" in rule and rule != 'IdentifierNT-->VarCopy' and rule != 'IdentifierNT-->MethodCopy') \
+               "IdentifierNT" in lhs) \
                or re.match(r"^Nt_.*_literal-->.*", rule) \
                or rule == "<unk>"
 
