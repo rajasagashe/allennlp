@@ -289,7 +289,10 @@ class JavaDatasetReader(DatasetReader):
         num_dataset_instances = params.pop_int('num_dataset_instances', -1)
         linking_feature_extracters = params.pop('linking_feature_extractors', None)
         # identifier_indexers = TokenIndexer.dict_from_params(params.pop('identifier_indexers'))
-        type_indexers = TokenIndexer.dict_from_params(params.pop('type_indexers'))
+        # todo(rajas) get rid of none
+        # type_indexers = TokenIndexer.dict_from_params(params.pop('type_indexers'), None)
+        # if type_indexers is None:
+        type_indexers = {'tokens': SingleIdTokenIndexer()}
         params.assert_empty(cls.__name__)
         return cls(utterance_indexers=utterance_indexers,
                    min_identifier_count=min_identifier_count,

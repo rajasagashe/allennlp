@@ -19,6 +19,7 @@ from allennlp.data.vocabulary import Vocabulary
 from allennlp.modules import Attention, TextFieldEmbedder, Seq2SeqEncoder, FeedForward
 from allennlp.modules.token_embedders import Embedding
 from allennlp.modules.similarity_functions import SimilarityFunction
+from allennlp.modules.time_distributed import TimeDistributed
 from allennlp.models.model import Model
 from allennlp.nn import util
 from allennlp.nn.util import get_text_field_mask
@@ -130,8 +131,65 @@ class JavaSemanticParser(Model):
                 metadata: List[Dict[str, str]] = None
                 ) -> Dict[str, torch.Tensor]:
 
-        # Encode summary, variables, methods with bi lstm.
-        ##################################################
+        # Encode variables, methods with bi lstm.
+        # embedded_variable_names = self._utterance_embedder(variable_names)
+        # variable_mask = get_text_field_mask(variable_names, num_wrapping_dims=1)
+        # print(embedded_variable_names.size())
+        # print(variable_mask.size())
+        # encoder_variable_outputs = self._dropout(self._encoder(embedded_variable_names, variable_mask))
+        # final_var_encoded = util.get_final_encoder_states(encoder_variable_outputs,
+        #                                                      variable_mask,
+        #                                                      True)
+        #
+        # # todo(rajas): change embedder to type embedder
+        # embedded_types = self._utterance_embedder(variable_types)
+        # variabletype_mask = get_text_field_mask(variable_types)
+        #
+        #
+        # encoder_variable_outputs = self._dropout(self._encoder(embedded_types, variabletype_mask))
+        # final_var_encoded = util.get_final_encoder_states(encoder_variable_outputs,
+        #                                                   variable_mask,
+        #                                                   True)
+
+        # embedded_variable_names = self._utterance_embedder(variable_names)
+        # _, _, num_variable_tokens, embedding_dim = embedded_variable_names.size()
+        # # (batch_size, num_names, encoding_dim)
+        # embedded_variable_types = self._utterance_embedder(variable_types)
+        # print('var tyeps', embedded_variable_types.size())
+        # encoder = TimeDistributed(self._encoder)
+        # variable_name_mask = get_text_field_mask(variable_names, num_wrapping_dims=1)
+        # # (batch_size, num_names, num_tokens, encoding_dim)
+        # encoded_variable_names = encoder(embedded_variable_names, variable_name_mask)
+        # print(encoded_variable_names.size())
+        # print(variable_name_mask.size())
+        # print(variable_name_mask)
+        # # (batch_size, num_names, encoding_dim)
+        # encoded_variable_names = encoded_variable_names.view(-1, num_variable_tokens, embedding_dim)
+        # variable_name_mask = variable_name_mask.view(-1, num_variable_tokens)
+        # print(encoded_variable_names.size())
+        # print(variable_name_mask.size())
+        # final_var_encoded = util.get_final_encoder_states(encoded_variable_names,
+        #                                                   variable_name_mask,
+        #                                                   True)
+        #
+        # variable_name_type_input = torch.cat((final_var_encoded, embedded_variable_types.unsqueeze(2)), dim=2)
+        # print(variable_name_type_input.size())
+        # variable_type_mask = get_text_field_mask(variable_types).unsqueeze(-1)
+        # variable_name_type_mask = torch.cat((variable_name_mask, variable_type_mask), dim=2)
+        # encoded_variable_names_types = encoder(variable_name_type_input, variable_name_type_mask)
+
+
+
+
+
+        # use utterance embedder to embed both set of names
+        # (batch_size, num_names, num_tokens, embedding_dim)
+
+        # pass both through bilstm
+        # (batch_size, num_names, embedding_dim)
+
+        # declare an embedder for types
+
 
         # (batch_size, input_sequence_length, encoder_output_dim)
         embedded_utterance = self._utterance_embedder(utterance)

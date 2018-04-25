@@ -49,7 +49,9 @@ class JavaParserPredictor(Predictor):
 
         instance = self._dataset_reader.text_to_instance(tokenized_utterance,
                                                          java_class['variableNames'],
+                                                         ["variable types"],
                                                          java_class['methodNames'],
+                                                         ["method types"],
                                                          self.global_production_rule_fields,
                                                          self.global_rule2index)
 

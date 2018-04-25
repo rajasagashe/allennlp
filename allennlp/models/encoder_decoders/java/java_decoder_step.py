@@ -117,6 +117,16 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                                        encoder_outputs,
                                                                        encoder_output_mask.float())
 
+        # todo(rajas):
+        # use attended_question and concatenated environment rep to generate attention weights on the environment
+        # the encoder_outputs for this will be of size:
+        # (group_size, num_environment_tokens, encoding_dim)
+        # attention weights will be
+        # (group_size, num_environment_tokens)
+
+        # then we multiply these weights by entity_action_logits
+
+
 
         # To predict an action, we'll use a concatenation of the hidden state and attention over
         # the question.  We'll just predict an _embedding_, which we will compare to embedded
