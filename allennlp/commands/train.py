@@ -282,7 +282,8 @@ def train_model(params: Params,
                                   iterator,
                                   train_data,
                                   validation_data,
-                                  trainer_params)
+                                  trainer_params,
+                                  extra_data=test_data)
 
     evaluate_on_test = params.pop_bool("evaluate_on_test", False)
     params.assert_empty('base train command')

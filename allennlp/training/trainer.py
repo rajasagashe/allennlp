@@ -135,6 +135,7 @@ class Trainer:
                  iterator: DataIterator,
                  train_dataset: Iterable[Instance],
                  validation_dataset: Optional[Iterable[Instance]] = None,
+                 extra_dataset: Optional[Iterable[Instance]] = None,
                  patience: int = 2,
                  validation_metric: str = "-loss",
                  num_epochs: int = 20,
@@ -225,6 +226,7 @@ class Trainer:
         self._optimizer = optimizer
         self._train_data = train_dataset
         self._validation_data = validation_dataset
+        self._extra_data = extra_dataset
 
         self._patience = patience
         self._num_epochs = num_epochs
@@ -640,6 +642,37 @@ class Trainer:
 
         return val_loss, batches_this_epoch
 
+    def _extra_data_loss(self) -> Tuple[float, int]:
+        """
+        Computes the validation loss. Returns it and the number of batches.
+        """
+        logger.info("Evaluating on Extra Data")
+
+        self._model.eval()
+
+        val_generator = self._iterator(self._extra_data,
+                                       num_epochs=1,
+                                       cuda_device=self._iterator_device,
+                                       for_training=False)
+        num_validation_batches = self._iterator.get_num_batches(self._extra_data)
+        val_generator_tqdm = Tqdm.tqdm(val_generator,
+                                       total=num_validation_batches)
+        batches_this_epoch = 0
+        val_loss = 0
+        for batch in val_generator_tqdm:
+            batches_this_epoch += 1
+
+            loss = self._batch_loss(batch, for_training=False)
+            val_loss += loss.data.cpu().numpy()
+
+            # Update the description with the latest metrics
+            val_metrics = self._get_metrics(val_loss, batches_this_epoch)
+            description = self._description_from_metrics(val_metrics)
+            val_generator_tqdm.set_description(description, refresh=False)
+
+        return val_loss, batches_this_epoch
+
+
     def train(self) -> Dict[str, Any]:
         """
         Trains the supplied model with the supplied parameters.
@@ -666,14 +699,6 @@ class Trainer:
             train_metrics = self._train_epoch(epoch)
 
             if self._validation_data is not None:
-                # todo(rajas): remove this eventually
-                f = open('debug/pred_target_strings.csv', 'w+')
-                f.write('Target, Predicted\n')
-                f.close()
-                codef = open('debug/pred_target_code.txt', 'w+')
-                codef.write('Targ and Predicted Code\n')
-                codef.close()
-
                 # We have a validation set, so compute all the metrics on it.
                 val_loss, num_batches = self._validation_loss()
                 val_metrics = self._get_metrics(val_loss, num_batches, reset=True)
@@ -695,6 +720,29 @@ class Trainer:
                 is_best_so_far = True
                 val_metrics = {}
                 this_epoch_val_metric = None
+
+            if self._extra_data is not None:
+                # It'd be nice to write the predictions into the model dir, but the
+                # model doesn't know where this is :(.
+                # results_path = os.path.join(self._serialization_dir, "pred_target_code.txt")
+                codef = open('debug/pred_target_code.txt', 'w+')
+                codef.write('Targ and Predicted Code\n')
+                codef.close()
+
+                # We have a small piece of data to evaluate on. This contains
+                # low hanging fruit so metrics should be high.
+                extra_loss, num_batches = self._extra_data_loss()
+                extra_metrics = self._get_metrics(extra_loss, num_batches, reset=True)
+
+                message_template = "%s %s : %3f "
+
+                metric_names = set(extra_metrics.keys())
+
+                for name in metric_names:
+                    extra_metric = extra_metrics.get(name)
+                    logger.info(message_template, "Extra", name, extra_metric)
+
+
 
             self._save_checkpoint(epoch, validation_metric_per_epoch, is_best=is_best_so_far)
             self._metrics_to_tensorboard(epoch, train_metrics, val_metrics=val_metrics)
@@ -886,7 +934,8 @@ class Trainer:
                     iterator: DataIterator,
                     train_data: Iterable[Instance],
                     validation_data: Optional[Iterable[Instance]],
-                    params: Params) -> 'Trainer':
+                    params: Params,
+                    extra_data: Optional[Iterable[Instance]] = None) -> 'Trainer':
 
         patience = params.pop_int("patience", 2)
         validation_metric = params.pop("validation_metric", "-loss")
@@ -916,6 +965,7 @@ class Trainer:
         params.assert_empty(cls.__name__)
         return Trainer(model, optimizer, iterator,
                        train_data, validation_data,
+                       extra_dataset=extra_data,
                        patience=patience,
                        validation_metric=validation_metric,
                        num_epochs=num_epochs,
