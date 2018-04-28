@@ -161,7 +161,10 @@ class JavaDatasetReader(DatasetReader):
             metadata_dict['code'] = code
         fields['metadata'] = MetadataField(metadata_dict)
 
-        knowledge_graph = self.get_java_class_knowledge_graph(method_names=method_names, variable_names=variable_names)
+        knowledge_graph, entity2isType = self.get_java_class_knowledge_graph(variable_names=variable_names,
+                                                              variable_types=variable_types,
+                                                              method_names=method_names,
+                                                              method_types=method_types)
 
         # We need to iterate over knowledge_graph's entities since these are sorted and each entity in
         # entity_tokens needs to correspond to knowledge_graph's entities.
@@ -184,7 +187,7 @@ class JavaDatasetReader(DatasetReader):
                                                entity_tokens=entity_tokens,
                                                feature_extractors=self._linking_feature_extractors)
 
-        environment_rules, environmentrule2index = self.get_java_class_specific_rules(knowledge_graph)
+        environment_rules, environmentrule2index = self.get_java_class_specific_rules(knowledge_graph, entity2isType)
 
         if rules is not None:
             target_rule_field = self.get_target_rule_field(rules, globalrule2index, environmentrule2index)
@@ -242,27 +245,52 @@ class JavaDatasetReader(DatasetReader):
         return lhs2trimmedrhs
 
 
-    def get_java_class_knowledge_graph(self, method_names, variable_names):
+    def get_java_class_knowledge_graph(self,
+                                       variable_names,
+                                       variable_types,
+                                       method_names,
+                                       method_types):
         # Note that sriniclass_ prefix means that the name is copied from the
         # java class.
-        # todo(rajas): add a class field for sriniclass and srinifunc
-        # todo(rajas): add types to this graph as well
         entities = []
         entity_text = {}
-        for name in (variable_names):
+        neighbors = defaultdict(list)
+        entity2isType = {}
+        for name, type in zip(variable_names, variable_types):
             entity = 'sriniclass_' + name
             entities.append(entity)
             entity_text[entity] = name
-        for name in (method_names):
+
+            entity2isType[entity] = False
+            entity2isType[type] = True
+
+            if type not in entities:
+                # We don't want to add the same type such as "Object" repeatedly.
+                entities.append(type)
+                entity_text[type] = type
+            neighbors[entity].append(type)
+            neighbors[type].append(entity)
+        for name, type in zip(method_names, method_types):
             entity = 'srinifunc_' + name
             entities.append(entity)
             entity_text[entity] = name
 
-        neighbors = {entity: [] for entity in entity_text}
-        knowledge_graph = KnowledgeGraph(entities=entities, entity_text=entity_text, neighbors=neighbors)
-        return knowledge_graph
+            entity2isType[entity] = False
+            entity2isType[type] = True
 
-    def get_java_class_specific_rules(self, knowledge_graph: KnowledgeGraph):
+            if type not in entities:
+                entities.append(type)
+                entity_text[type] = type
+            neighbors[entity].append(type)
+            neighbors[type].append(entity)
+
+        # neighbors = {entity: [] for entity in entity_text}
+        knowledge_graph = KnowledgeGraph(entities=entities, entity_text=entity_text, neighbors=neighbors)
+        return knowledge_graph, entity2isType
+
+    def get_java_class_specific_rules(self, knowledge_graph: KnowledgeGraph, entity2isType):
+        # todo(rajas): clean this method up, ideally entity2isType should be part of the knowledge graph.
+
         # Returns the rules unique per training instance, which copy variable
         # and method names from the java class.
         java_class_rules = []
@@ -272,21 +300,35 @@ class JavaDatasetReader(DatasetReader):
             # Variable names and method names are only generated from the IdentifierNT rule which
             # was generated from Primary, Nt_33, and two others. The other two occur less than 10
             # times so they are omitted.
-            rule1 = IdentifierNT + 'Primary-->' + entity
-            rule2 = IdentifierNT + 'Nt_33-->' + entity
 
-            field1 = ProductionRuleField(rule1, is_global_rule=False)
-            field2 = ProductionRuleField(rule2, is_global_rule=False)
-            java_class_rules.extend([field1, field2])
+            if entity2isType[entity] == False:
+                rule1 = IdentifierNT + 'Primary-->' + entity
+                rule2 = IdentifierNT + 'Nt_33-->' + entity
 
-            javaclassrule2index[rule1] = index
-            javaclassrule2index[rule2] = index + 1
-            index += 2
+                field1 = ProductionRuleField(rule1, is_global_rule=False)
+                field2 = ProductionRuleField(rule2, is_global_rule=False)
+                java_class_rules.extend([field1, field2])
+
+                javaclassrule2index[rule1] = index
+                javaclassrule2index[rule2] = index + 1
+                index += 2
+            else:
+                # Since entity type is a type, make rule class or interface type
+                rule1 = IdentifierNT + 'ClassOrInterfaceType-->' + entity
+
+                field1 = ProductionRuleField(rule1, is_global_rule=False)
+                java_class_rules.append(field1)
+
+                javaclassrule2index[rule1] = index
+                index += 1
         return java_class_rules, javaclassrule2index
 
     def get_target_rule_field(self, rules, globalrule2index, environmentrule2index):
         rule_indexes = []
         for rule in rules:
+            # It's important that the envirorule if statement comes first. In the case
+            # that there is rule for the type from the environment, we want to encourage
+            # the parser to copy from the environment.
             if rule in environmentrule2index:
                 # Environment rule indexes come after last global index since the
                 # environment rules are appended to the global rules list.

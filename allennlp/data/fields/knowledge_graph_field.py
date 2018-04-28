@@ -113,14 +113,18 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
         self._max_table_tokens = max_table_tokens
 
         feature_extractors = feature_extractors or [
-                'exact_token_match',
-                'contains_exact_token_match',
-                'lemma_match',
-                'contains_lemma_match',
-                'edit_distance',
-                'related_column',
-                'related_column_lemma',
-                'span_overlap_fraction',
+                "exact_token_match",
+                "contains_exact_token_match",
+                "substring_token_match_larger_than_three",
+                "neighbor_exact_match",
+                "neighbor_contains_exact_match",
+                "neighbor_substring_token_match_larger_than_three"
+                # 'lemma_match',
+                # 'contains_lemma_match',
+                # 'edit_distance',
+                # 'related_column',
+                # 'related_column_lemma',
+                # 'span_overlap_fraction',
                 ]
         self._feature_extractors: List[Callable[[str, List[Token], Token, int, List[Token]], float]] = []
         for feature_extractor_name in feature_extractors:
@@ -305,7 +309,7 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
         # For example token = "total" and entity text is "_total". The camel case
         # splitting doesn't split on underscores.
         # todo(rajas): split on other symbols as well so this method not needed.
-        # We check for length greater than 3 since short utterance words will overlap
+        # We check for length at least 3 since short utterance words will overlap
         # even if there is no link e.g. token = "to" and entity text = "setConnectorInfo"
         if len(token.text) < 3:
             return 0.0
@@ -314,27 +318,28 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
             return 1.0
         return 0.0
 
-    def _lemma_match(self,
-                     entity: str,
-                     entity_text: List[Token],
-                     token: Token,
-                     token_index: int,
-                     tokens: List[Token]) -> float:
-        if len(entity_text) != 1:
-            return 0.0
-        return self._contains_lemma_match(entity, entity_text, token, token_index, tokens)
-
-    def _contains_lemma_match(self,
-                              entity: str,
-                              entity_text: List[Token],
-                              token: Token,
-                              token_index: int,
-                              tokens: List[Token]) -> float:
-        if token.text in self._entity_text_exact_text[entity]:
-            return 1.0
-        if token.lemma_ in self._entity_text_lemmas[entity]:
-            return 1.0
-        return 0.0
+    # todo(rajas): i'd like the add the lemma match features back in eventually
+    # def _lemma_match(self,
+    #                  entity: str,
+    #                  entity_text: List[Token],
+    #                  token: Token,
+    #                  token_index: int,
+    #                  tokens: List[Token]) -> float:
+    #     if len(entity_text) != 1:
+    #         return 0.0
+    #     return self._contains_lemma_match(entity, entity_text, token, token_index, tokens)
+    #
+    # def _contains_lemma_match(self,
+    #                           entity: str,
+    #                           entity_text: List[Token],
+    #                           token: Token,
+    #                           token_index: int,
+    #                           tokens: List[Token]) -> float:
+    #     if token.text in self._entity_text_exact_text[entity]:
+    #         return 1.0
+    #     if token.lemma_ in self._entity_text_lemmas[entity]:
+    #         return 1.0
+    #     return 0.0
 
     def _edit_distance_code(self,
                        entity: str,
@@ -347,14 +352,58 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
         edit_distance = float(editdistance.eval(entity_text[0].text, token.text))
         return 1.0 - edit_distance / len(token.text)
 
-    def _edit_distance(self,
-                       entity: str,
-                       entity_text: List[Token],
-                       token: Token,
-                       token_index: int,
-                       tokens: List[Token]) -> float:
-        edit_distance = float(editdistance.eval(' '.join(e.text for e in entity_text), token.text))
-        return 1.0 - edit_distance / len(token.text)
+    # def _edit_distance(self,
+    #                    entity: str,
+    #                    entity_text: List[Token],
+    #                    token: Token,
+    #                    token_index: int,
+    #                    tokens: List[Token]) -> float:
+    #     edit_distance = float(editdistance.eval(' '.join(e.text for e in entity_text), token.text))
+    #     return 1.0 - edit_distance / len(token.text)
+
+    def _neighbor_exact_match(self,
+                                entity: str,
+                                entity_text: List[Token],
+                                token: Token,
+                                token_index: int,
+                                tokens: List[Token]) -> float:
+        neighbors = self.knowledge_graph.neighbors[entity]
+        for neighbor in neighbors:
+            neighbor_tokens = self._entity_text_map[neighbor]
+            if self._exact_token_match(None, neighbor_tokens, token, None, None) == 1.0:
+                return 1.0
+        return 0.0
+
+    def _neighbor_contains_exact_match(self,
+                              entity: str,
+                              entity_text: List[Token],
+                              token: Token,
+                              token_index: int,
+                              tokens: List[Token]) -> float:
+        neighbors = self.knowledge_graph.neighbors[entity]
+        for neighbor in neighbors:
+            x = self._contains_exact_token_match(neighbor, None, token, None, None)
+            if x == 1.0:
+                return 1.0
+        return 0.0
+
+    def _neighbor_substring_token_match_larger_than_three(self,
+                              entity: str,
+                              entity_text: List[Token],
+                              token: Token,
+                              token_index: int,
+                              tokens: List[Token]) -> float:
+        neighbors = self.knowledge_graph.neighbors[entity]
+        for neighbor in neighbors:
+            neighbor_tokens = self._entity_text_map[neighbor]
+            x = self._substring_token_match_larger_than_three(None,
+                                                             neighbor_tokens,
+                                                             token,
+                                                             None, None)
+            if x == 1.0:
+                return 1.0
+        return 0.0
+
 
     def _related_column(self,
                         entity: str,
