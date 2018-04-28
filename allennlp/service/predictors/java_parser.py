@@ -23,7 +23,12 @@ class JavaParserPredictor(Predictor):
         file_path = "/home/rajas/semparse/java-programmer/data/train.dataset"
         with open(file_path) as dataset_file:
             dataset = json.load(dataset_file)
-        self.global_production_rule_fields, self.global_rule2index = dataset_reader.get_global_rule_fields(dataset)
+        print('num_dataset_instances', dataset_reader._num_dataset_instances)
+        if dataset_reader._num_dataset_instances != -1:
+            dataset = dataset[0:dataset_reader._num_dataset_instances]
+
+        modified_rules = dataset_reader.split_identifier_rule_into_multiple(dataset)
+        self.global_production_rule_fields, self.global_rule2index = dataset_reader.get_global_rule_fields(modified_rules)
 
 
     @overrides
@@ -37,19 +42,35 @@ class JavaParserPredictor(Predictor):
         utterance_text = json_dict["question"]
         table_text = json_dict["table"]
 
-        java_class = {'methodNames': [], 'variableNames': []}
+        java_class = {'variable_names': [],
+                      'variable_types': [],
+                      'method_names': [],
+                      'method_types': []}
 
+        class_category = ''
         for row_index, line in enumerate(table_text.split('\n')):
             line = line.rstrip('\n')
-            tokens = line.split()
-            java_class[tokens[0]].extend(tokens[1:])
+            if ':' in line:
+                class_category = line
+            else:
+                print('should be name', line)
+                name, type = line.split('(')
+                type = type.split(')')[0]
+                if class_category == 'Variables:':
+                    java_class['variable_names'].append(name)
+                    java_class['variable_types'].append(type)
+                else:
+                    java_class['method_names'].append(name)
+                    java_class['method_types'].append(type)
 
         tokenized_utterance = utterance_text.split()
 
 
         instance = self._dataset_reader.text_to_instance(tokenized_utterance,
-                                                         java_class['variableNames'],
-                                                         java_class['methodNames'],
+                                                         java_class['variable_names'],
+                                                         java_class['variable_types'],
+                                                         java_class['method_names'],
+                                                         java_class['method_types'],
                                                          self.global_production_rule_fields,
                                                          self.global_rule2index)
 

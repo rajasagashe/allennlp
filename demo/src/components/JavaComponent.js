@@ -14,10 +14,115 @@ import ModelIntro from './ModelIntro'
 
 const parserExamples = [
     {
-      table: "variableNames inputInfo outputMessage validatorErrorMessage\n" +
-             "methodNames getInputInfo setValidatorErrorMessage getOutputMessage setInputInfo",
-      question: "Gets the validator error message.",
+      table: "Variables:\n" +
+              "warn (Object)\n" +
+              "trace (Object)\n" +
+              "debug (Object)\n" +
+              "Methods:\n" +
+              "Debug (void)\n" +
+              "Debug (void)\n" +
+              "getInfo (Object)\n" +
+              "getFatal (Object)",
+      question: "Returns the debug .",
     },
+    {
+      table: "Variables:\n" +
+              "contentEncodingInterceptor (HttpResponseInterceptor)\n" +
+              "backend (HttpClient)\n" +
+              "acceptEncodingInterceptor (HttpRequestInterceptor)\n" +
+              "Methods:\n" +
+              "getHttpHost (HttpHost)\n" +
+              "getConnectionManager (ClientConnectionManager)\n" +
+              "execute (HttpResponse)\n" +
+              "execute (HttpResponse)\n" +
+              "execute (HttpResponse)\n" +
+              "execute (HttpResponse)\n" +
+              "execute (T)\n" +
+              "execute (T)\n" +
+              "execute (T)\n" +
+              "execute (T)\n" +
+              "getParams (HttpParams)",
+      question: "Gets the HttpClient to issue request .",
+    },
+    {
+      table: "Variables:\n" +
+      "m_trace (ITrace2D)\n" +
+      "Methods:\n" +
+      "collectData (void)",
+      question: "Returns the trace data is added to",
+    },
+    {
+      table: "Variables:\n" +
+      "classLoader (ClassLoader)\n" +
+      "discovery (DiscoverClasses)\n" +
+      "useContextClassLoader (boolean)\n" +
+      "log (Log)\n" +
+      "Methods:\n" +
+      "getUseContextClassLoader (boolean)\n" +
+      "getDiscoverClasses (DiscoverClasses)\n" +
+      "loadClass (TagLibrary)\n" +
+      "getClassLoader (ClassLoader)\n" +
+      "newInstance (TagLibrary)\n" +
+      "resolveTagLibrary (TagLibrary)\n" +
+      "setClassLoader (void)\n" +
+      "setUseContextClassLoader (void)",
+      question: "Sets the fully configured DiscoverClasses instance to be used to lookup services",
+    },
+    {
+      table: "Variables:\n" +
+      "name (String)\n" +
+      "catalogName (String)\n" +
+      "optional (boolean)\n" +
+      "nameKey (String)\n" +
+      "Methods:\n" +
+      "setName (void)\n" +
+      "getNameKey (String)\n" +
+      "getName (String)\n" +
+      "setNameKey (void)\n" +
+      "getCatalogName (String)\n" +
+      "postprocess (boolean)\n" +
+      "getCommand (Command)\n" +
+      "isOptional (boolean)\n" +
+      "execute (boolean)\n" +
+      "setOptional (void)",
+      question: "Set the name of the Catalog to be searched , ornull to search the default Catalog .",
+    },
+    {
+      table: "Variables:\n" +
+      "outputDir (File)\n" +
+      "cache (LinkedList)\n" +
+      "_classSource (ClassSource)\n" +
+      "classpath (String)\n" +
+      "openZipFiles (Map)\n" +
+      "DEBUG (boolean)\n" +
+      "USE_SYSTEM_CLASSES (boolean)\n" +
+      "CACHE_LIMIT (int)\n" +
+      "verbose (boolean)\n" +
+      "Methods:\n" +
+      "outputDir (File)\n" +
+      "loadClassFromStream (ClassInfo)\n" +
+      "appendClassPath (void)\n" +
+      "loadClassFromFile (ClassInfo)\n" +
+      "setVerbose (void)\n" +
+      "loadClassesFromZipFile (ClassInfo[])\n" +
+      "done (void)\n" +
+      "prependClassPath (void)\n" +
+      "outputStreamFor (OutputStream)",
+      question: "Set the directory into which commited class files should be written ."
+    },
+    {
+      table: "Variables:\n" +
+      "PROP_WEBTESTS_BROWSER (String)\n" +
+      "PROP_WEBTESTS_LOCALES (String)\n" +
+      "PROP_WEBTESTS_HUB_URL (String)\n" +
+      "Methods:\n" +
+      "chrome (ChromeBuildr)\n" +
+      "safari (SafariBuildr)\n" +
+      "fromSysProps (SysPropsBuildr)\n" +
+      "build (WebDriver)\n" +
+      "firefox (FirefoxBuildr)" ,
+      question: "Create and return a RemoteBuildr instance ."
+    }
 ];
 
 const title = "Java Semantic Parsing";
