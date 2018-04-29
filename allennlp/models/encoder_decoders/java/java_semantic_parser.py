@@ -423,7 +423,7 @@ class JavaSemanticParser(Model):
         }
 
     @staticmethod
-    @timeit
+    # @timeit
     def _create_grammar_state(possible_actions: List[ProductionRuleArray]) -> JavaGrammarState:
         # valid_actions = world.get_valid_actions()
         # action_mapping = {}
@@ -441,7 +441,7 @@ class JavaSemanticParser(Model):
             nonterminal2action_index[lhs].append(i)
         return JavaGrammarState([START_SYMBOL], nonterminal2action_index)
 
-    @timeit
+    # @timeit
     def _embed_actions(self, actions: List[List[ProductionRuleArray]]) -> Tuple[torch.Tensor,
                                                                                 Dict[Tuple[int, int], int]]:
         """
@@ -474,12 +474,18 @@ class JavaSemanticParser(Model):
                 if not action[0]:
                     # This rule is padding.
                     continue
-                global_action_id = action_vocab.get(action[0], -1)
+                # If it's global look for it's id in the action vocab.
+                # Since some actions are both in the vocab and copied from the enviro
+                # it's important to check this.
+                if action[1]:
+                    global_action_id = action_vocab.get(action[0]) #, -1)
+                else:
+                    global_action_id = -1
                 action_map[(batch_index, action_index)] = global_action_id
         return embedded_actions, action_map
 
     @staticmethod
-    @timeit
+    # @timeit
     def _map_entity_productions(linking_scores: torch.FloatTensor,
                                 batch_entities: List[Set[str]],
                                 actions: List[List[ProductionRuleArray]]) -> Tuple[torch.Tensor,
