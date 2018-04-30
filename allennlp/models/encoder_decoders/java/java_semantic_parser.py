@@ -216,6 +216,9 @@ class JavaSemanticParser(Model):
                 outputs['loss'] = self._decoder_trainer.decode(initial_state,
                                              self._decoder_step,
                                              rules)['loss']
+
+            # Now remove unk rules from the grammar state for better code gen.
+            initial_state.grammar_state = [self._create_grammar_state_no_unks(a) for a in actions]
             num_steps = self._max_decoding_steps
             initial_state.debug_info = [[] for _ in range(batch_size)]
             best_final_states = self._decoder_beam_search.search(num_steps,
@@ -438,6 +441,19 @@ class JavaSemanticParser(Model):
         nonterminal2action_index = defaultdict(list)
         for i, action in enumerate(possible_actions):
             lhs = action[0].split('-->')[0]
+            nonterminal2action_index[lhs].append(i)
+        return JavaGrammarState([START_SYMBOL], nonterminal2action_index)
+
+    @staticmethod
+    # @timeit
+    def _create_grammar_state_no_unks(possible_actions: List[ProductionRuleArray]) -> JavaGrammarState:
+        nonterminal2action_index = defaultdict(list)
+        for i, action in enumerate(possible_actions):
+            if not action[0]: # padding
+                continue
+            lhs, rhs = action[0].split('-->')
+            if 'UNK' in rhs:
+                continue
             nonterminal2action_index[lhs].append(i)
         return JavaGrammarState([START_SYMBOL], nonterminal2action_index)
 
