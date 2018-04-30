@@ -26,6 +26,8 @@ IdentifierOther = IdentifierNT + 'Other'
 # LITERALS_TO_TRIM = [IdentifierNT, "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
 IDENTIFIER_TYPES = ['Primary', 'ClassOrInterfaceType', 'Nt_33']
 LITERALS_TO_TRIM = [IdentifierNT+IDENTIFIER_TYPES[0], IdentifierNT+IDENTIFIER_TYPES[1], IdentifierNT+IDENTIFIER_TYPES[2], IdentifierOther, "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
+UNK = '<UNK>'
+DUMMY = '<DUMMY>'
 
 @DatasetReader.register("java")
 class JavaDatasetReader(DatasetReader):
@@ -120,6 +122,15 @@ class JavaDatasetReader(DatasetReader):
                 if 'sriniclass' in rule or 'srinifunc' in rule:
                     # Names from environment shouldn't be added to global rules.
                     continue
+
+                # identifiers for class or interface types are removed, since these
+                # should strictly be copied from the environment. 1/3 of cases though,
+                # an identifiertype that needs to be used won't be in the environment.
+                # however, unks should be part of the vocabulary.
+                if (lhs == (IdentifierNT + 'ClassOrInterfaceType')) and (rhs != UNK and rhs != DUMMY):
+                # if (lhs == (IdentifierNT + 'ClassOrInterfaceType')):
+                    continue
+
                 field = ProductionRuleField(rule, is_global_rule=True)
                 production_rule_fields.append(field)
 
@@ -240,7 +251,10 @@ class JavaDatasetReader(DatasetReader):
             # if nt in lhs2trimmedrhs:
             # We could check first whether any trimming occurred, but this
             # is guaranteed to happen so we add unk by default.
-            lhs2trimmedrhs[nt].append('<UNK>')
+            lhs2trimmedrhs[nt].append(UNK)
+            # A DUMMY action is added for when UNK's are removed during test time
+            # to prevent the number of embedded actions from being 0.
+            lhs2trimmedrhs[nt].append(DUMMY)
 
         return lhs2trimmedrhs
 
@@ -252,6 +266,10 @@ class JavaDatasetReader(DatasetReader):
                                        method_types):
         # Note that sriniclass_ prefix means that the name is copied from the
         # java class.
+
+        # todo(rajas): handle types like List<String>. ideally this should
+        # map to 3 types
+
         entities = []
         entity_text = {}
         neighbors = defaultdict(list)
@@ -337,7 +355,7 @@ class JavaDatasetReader(DatasetReader):
                 rule_indexes.append(globalrule2index[rule])
             else:
                 lhs, _ = rule.split('-->')
-                rule_indexes.append(globalrule2index[lhs + '--><UNK>'])
+                rule_indexes.append(globalrule2index[lhs + '-->' + UNK])
 
         # todo(rajas) convert to an index field
         rule_field = ArrayField(np.array(rule_indexes), padding_value=-1)
