@@ -53,7 +53,6 @@ class JavaParserPredictor(Predictor):
             if ':' in line:
                 class_category = line
             else:
-                print('should be name', line)
                 name, type = line.split('(')
                 type = type.split(')')[0]
                 if class_category == 'Variables:':
