@@ -99,7 +99,9 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                for rnn_state in state.rnn_state])
         endtime1 = time.time()
         timediff1 = endtime1 - take_step_start
-        # todo(rajas): get the current non terminal embedding if accuracy suffers
+
+        # The scores from all prior state transitions until now.  Shape: (group_size, 1).
+        scores_so_far = torch.stack(state.score)
 
         start_decoding = time.time()
         # (group_size, decoder_input_dim)
@@ -176,25 +178,27 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                                   entity_action_mask.float()) + mix1
                     embedded_action_probs = util.masked_log_softmax(embedded_action_logits,
                                                                     embedded_action_mask.float()) + mix2
-                    log_probs = torch.cat([embedded_action_probs, entity_action_probs], dim=1)
+                    current_log_probs = torch.cat([embedded_action_probs, entity_action_probs], dim=1)
                 else:
                     action_logits = torch.cat([embedded_action_logits, entity_action_logits], dim=1)
                     action_mask = torch.cat([embedded_action_mask, entity_action_mask], dim=1).float()
-                    log_probs = util.masked_log_softmax(action_logits, action_mask)
+                    current_log_probs = util.masked_log_softmax(action_logits, action_mask)
             else:
                 action_logits = embedded_action_logits
                 action_mask = embedded_action_mask.float()
-                log_probs = util.masked_log_softmax(action_logits, action_mask)
+                current_log_probs = util.masked_log_softmax(action_logits, action_mask)
         else:
             entity_action_logits, entity_action_mask = \
                 self._get_entity_action_logits(state, actions_to_link, attention_weights)
             action_logits = entity_action_logits
             action_mask = entity_action_mask.float()
-            log_probs = util.masked_log_softmax(action_logits, action_mask)
+            current_log_probs = util.masked_log_softmax(action_logits, action_mask)
             action_embeddings = None
 
         take_step_end = time.time()
         debug_print("Time for take step", (take_step_end - take_step_start)* 1000)
+
+        log_probs = scores_so_far + current_log_probs
 
         if allowed_actions is not None:
             # This method is slow but integrates well with beam search, so use it
@@ -608,7 +612,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 # regroup them later, as that's a really easy operation.
                 batch_index = state.batch_indices[group_index]
                 new_action_history = state.action_history[group_index] + [action]
-                new_score = state.score[group_index] + sorted_log_probs[group_index, action_index]
+                # new_score = state.score[group_index] + sorted_log_probs[group_index, action_index]
+                new_score = sorted_log_probs[group_index, action_index]
 
                 production_rule = state.possible_actions[batch_index][action][0]
                 new_grammar_state = state.grammar_state[group_index].take_action(production_rule)
@@ -691,7 +696,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             batch_index = state.batch_indices[group_index]
             new_action_history = state.action_history[group_index] + [allowed_action_index]
 
-            new_score = state.score[group_index] + log_probs[group_index, log_probs_index]
+            # new_score = state.score[group_index] + log_probs[group_index, log_probs_index]
+            new_score = log_probs[group_index, log_probs_index]
 
             production_rule = state.possible_actions[batch_index][allowed_action_index][0]
             new_grammar_state = state.grammar_state[group_index].take_action(production_rule)
