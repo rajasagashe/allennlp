@@ -107,13 +107,17 @@ class JavaSemanticParser(Model):
                                              attention_function=attention_function,
                                              dropout=dropout)
 
-        f = open('debug/pred_target_strings.csv', 'w+')
-        f.write('Target, Predicted\n')
-        f.close()
-
-        codef = open('debug/pred_target_code.txt', 'w+')
-        codef.write('Targ and Predicted Code\n')
-        codef.close()
+        em_correct = open('debug/em_correct.txt', 'w+')
+        em_incorrect = open('debug/em_incorrect.txt', 'w+')
+        em_correct.close()
+        em_incorrect.close()
+        # f = open('debug/pred_target_strings.csv', 'w+')
+        # f.write('Target, Predicted\n')
+        # f.close()
+        #
+        # codef = open('debug/pred_target_code.txt', 'w+')
+        # codef.write('Targ and Predicted Code\n')
+        # codef.close()
 
     @overrides
     # @timeit
@@ -395,6 +399,8 @@ class JavaSemanticParser(Model):
 
     def _log_predictions(self, metadata, pred_code, batch):
         codef = open('debug/pred_target_code.txt', 'a')
+        em_correct = open('debug/em_correct.txt', 'a')
+        em_incorrect = open('debug/em_incorrect.txt', 'a')
         codef.write("batch, " + str(batch) + '\n')
 
         log = '==============' * 4 + '\n'
@@ -410,6 +416,13 @@ class JavaSemanticParser(Model):
         print(log)
         codef.write(log)
         codef.close()
+
+        if metadata['code'] == pred_code:
+            em_correct.write(log)
+        else:
+            em_incorrect.write(log)
+        em_correct.close()
+        em_incorrect.close()
 
     def combine_name_types(self, names, types):
         combine_str = ""

@@ -127,53 +127,71 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         predicted_action_embedding = self._dropout(self._output_projection_layer(action_query))
         end_decoding = time.time()
 
+        # print(state.grammar_state[0]._nonterminal_stack[-1])
+        # print('--------------')
+        # for gs in state.grammar_state:
+        #     print(gs._nonterminal_stack[-1])
+        # if state.grammar_state[0]._nonterminal_stack[-1] == 'IdentifierNTClassOrInterfaceType':
+        #     print('yo')
+
+
         if allowed_actions is not None:
             actions_to_embed, actions_to_link, allowed_logit_indices = self._get_actions_to_consider_optimized(state, allowed_actions)
             considered_actions = None
         else:
             considered_actions, actions_to_embed, actions_to_link = self._get_actions_to_consider(state)
 
-        # action_embeddings: (group_size, num_embedded_actions, action_embedding_dim)
-        # action_mask: (group_size, num_embedded_actions)
-        action_embeddings, embedded_action_mask = self._get_action_embeddings(state, actions_to_embed)
+        num_actions = [len(action_list) for action_list in actions_to_embed]
+        max_num_actions = max(num_actions)
+        if max_num_actions != 0:
+            # action_embeddings: (group_size, num_embedded_actions, action_embedding_dim)
+            # action_mask: (group_size, num_embedded_actions)
+            action_embeddings, embedded_action_mask = self._get_action_embeddings(state, actions_to_embed)
 
-        # We'll do a batch dot product here with `bmm`.  We want `dot(predicted_action_embedding,
-        # action_embedding)` for each `action_embedding`, and we can get that efficiently with
-        # `bmm` and some squeezing.
-        # Shape: (group_size, num_embedded_actions)
-        embedded_action_logits = action_embeddings.bmm(predicted_action_embedding.unsqueeze(-1)).squeeze(-1)
+            # We'll do a batch dot product here with `bmm`.  We want `dot(predicted_action_embedding,
+            # action_embedding)` for each `action_embedding`, and we can get that efficiently with
+            # `bmm` and some squeezing.
+            # Shape: (group_size, num_embedded_actions)
+            embedded_action_logits = action_embeddings.bmm(predicted_action_embedding.unsqueeze(-1)).squeeze(-1)
 
-        if actions_to_link:
-            # entity_action_logits: (group_size, num_entity_actions)
-            # entity_action_mask: (group_size, num_entity_actions)
-            entity_action_logits, entity_action_mask = \
-                    self._get_entity_action_logits(state, actions_to_link, attention_weights)
+            if actions_to_link:
+                # entity_action_logits: (group_size, num_entity_actions)
+                # entity_action_mask: (group_size, num_entity_actions)
+                entity_action_logits, entity_action_mask = \
+                        self._get_entity_action_logits(state, actions_to_link, attention_weights)
 
-            # The `action_embeddings` tensor gets used later as the input to the next decoder step.
-            # For linked actions, we don't have any action embedding, so we use the entity type
-            # instead.
-            # action_embeddings = torch.cat([action_embeddings, entity_type_embeddings], dim=1)
-            if self._mixture_feedforward is not None:
-                # The entity and action logits are combined with a mixture weight to prevent the
-                # entity_action_logits from dominating the embedded_action_logits if a softmax
-                # was applied on both together.
-                mixture_weight = self._mixture_feedforward(hidden_state)
-                mix1 = torch.log(mixture_weight)
-                mix2 = torch.log(1 - mixture_weight)
+                # The `action_embeddings` tensor gets used later as the input to the next decoder step.
+                # For linked actions, we don't have any action embedding, so we use the entity type
+                # instead.
+                # action_embeddings = torch.cat([action_embeddings, entity_type_embeddings], dim=1)
+                if self._mixture_feedforward is not None:
+                    # The entity and action logits are combined with a mixture weight to prevent the
+                    # entity_action_logits from dominating the embedded_action_logits if a softmax
+                    # was applied on both together.
+                    mixture_weight = self._mixture_feedforward(hidden_state)
+                    mix1 = torch.log(mixture_weight)
+                    mix2 = torch.log(1 - mixture_weight)
 
-                entity_action_probs = util.masked_log_softmax(entity_action_logits,
-                                                              entity_action_mask.float()) + mix1
-                embedded_action_probs = util.masked_log_softmax(embedded_action_logits,
-                                                                embedded_action_mask.float()) + mix2
-                log_probs = torch.cat([embedded_action_probs, entity_action_probs], dim=1)
+                    entity_action_probs = util.masked_log_softmax(entity_action_logits,
+                                                                  entity_action_mask.float()) + mix1
+                    embedded_action_probs = util.masked_log_softmax(embedded_action_logits,
+                                                                    embedded_action_mask.float()) + mix2
+                    log_probs = torch.cat([embedded_action_probs, entity_action_probs], dim=1)
+                else:
+                    action_logits = torch.cat([embedded_action_logits, entity_action_logits], dim=1)
+                    action_mask = torch.cat([embedded_action_mask, entity_action_mask], dim=1).float()
+                    log_probs = util.masked_log_softmax(action_logits, action_mask)
             else:
-                action_logits = torch.cat([embedded_action_logits, entity_action_logits], dim=1)
-                action_mask = torch.cat([embedded_action_mask, entity_action_mask], dim=1).float()
+                action_logits = embedded_action_logits
+                action_mask = embedded_action_mask.float()
                 log_probs = util.masked_log_softmax(action_logits, action_mask)
         else:
-            action_logits = embedded_action_logits
-            action_mask = embedded_action_mask.float()
+            entity_action_logits, entity_action_mask = \
+                self._get_entity_action_logits(state, actions_to_link, attention_weights)
+            action_logits = entity_action_logits
+            action_mask = entity_action_mask.float()
             log_probs = util.masked_log_softmax(action_logits, action_mask)
+            action_embeddings = None
 
         take_step_end = time.time()
         debug_print("Time for take step", (take_step_end - take_step_start)* 1000)
@@ -400,6 +418,13 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # Shape: (group_size, num_actions)
         end_pad = time.time()
 
+        # print('----'*20)
+        # print(num_actions)
+        # for gs in state.grammar_state:
+        #     print(gs._nonterminal_stack[-1])
+        #     print(gs.get_valid_actions())
+        #     # for a in gs._action_history:
+        #     #     print(a)
         action_tensor = Variable(state.score[0].data.new(padded_actions).long())
         end_copy = time.time()
 
