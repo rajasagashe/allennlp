@@ -50,6 +50,44 @@ class JavaDatasetReader(DatasetReader):
         self._tokenizer = tokenizer or WordTokenizer()
         self._linking_feature_extractors = linking_feature_extractors
 
+    class ASTNode:
+        def __init__(self, children, rule, desc):
+            self.children = children
+            self.rule = rule
+            self.desc = desc
+    def is_nonterminal(self, nt):
+        return nt[0].isupper()
+    def _is_terminal_rule(self, rule):
+        lhs, rhs = rule.split('-->')
+        return (
+               "IdentifierNT" in lhs) \
+               or re.match(r"^Nt_.*_literal-->.*", rule) \
+               or rule == "<unk>"
+
+    def gen_ast(self, rules, i):
+        curr = self.ASTNode([], rules[i], "")
+        lhs, rhs = rules[i].split('-->')
+        rhs_tokens = rhs.split('___')
+        if self._is_terminal_rule(rules[i]):
+            curr.desc += rhs
+        else:
+            for nt in rhs_tokens:
+                if self.is_nonterminal(nt):
+                    child, i = self.gen_ast(rules, i+1)
+                    curr.children.append(child)
+                    curr.desc += child.desc
+                else:
+                    curr.desc += nt
+        return curr, i
+
+    def printMethodCaller(self, curr):
+        lhs, rhs = curr.rule.split('-->')
+        if rhs == 'Expression___.___Nt_33':
+            print(curr.children[0].desc, curr.children[1].desc)
+        for c in curr.children:
+            self.printMethodCaller(c)
+
+
     @overrides
     def _read(self, file_path: str):
         # if `file_path` is a URL, redirect to the cache
@@ -58,11 +96,20 @@ class JavaDatasetReader(DatasetReader):
         logger.info("Reading file at %s", file_path)
         with open(file_path) as dataset_file:
             dataset = json.load(dataset_file)
-
         if self._num_dataset_instances != -1:
             dataset = dataset[0:self._num_dataset_instances]
 
+        # for i in range(10):
+        #     temp, _ = self.gen_ast(dataset[i]['rules'], 0)
+        #     self.printMethodCaller(temp)
+        # exit()
+
         modified_rules = self.split_identifier_rule_into_multiple(dataset)
+        # types = self.get_types_used_frequently_even_if_not_in_class(modified_rules, dataset)
+
+        # self.experiment_type(modified_rules, dataset)
+        # self.experiment_nt33(modified_rules, dataset)
+
         global_production_rule_fields, global_rule2index = self.get_global_rule_fields(modified_rules)
 
         logger.info("Reading the dataset")
@@ -78,6 +125,53 @@ class JavaDatasetReader(DatasetReader):
                                              # Pass the modified identifier rules.
                                              modified_rules[i])
             yield instance
+
+    def get_types_used_frequently_even_if_not_in_class(self, rules, dataset):
+        type_in_class_count = 0
+        num_types = 0
+        type2count = Counter()
+        for i, d in enumerate(dataset):
+            enviro_types = d['varTypes'] + d['methodReturns']
+            for rule in rules[i]:
+                lhs, rhs = rule.split('-->')
+                if lhs == 'IdentifierNTClassOrInterfaceType':
+                    inclass = False
+                    for t in enviro_types:
+                        if rhs in t:
+                            type_in_class_count += 1
+                            inclass = True
+                            break
+                    if not inclass:
+                        type2count[rhs] += 1
+                        # print('-'*20)
+                        # print(enviro_types)
+                        # print(rhs)
+                    num_types += 1
+
+        # print('Num type in class', type_in_class_count)
+        # print('Num type total', num_types)
+        # print(type2count.most_common(50))
+        # print(sum([count for t, count in type2count.most_common(50)]))
+        return [t for t, _ in type2count.most_common(50)]
+
+    def experiment_nt33(self, rules, dataset):
+        type_in_class_count = 0
+        num_types = 0
+        type2count = Counter()
+        for i, d in enumerate(dataset):
+            enviro_types = d['varTypes'] + d['methodReturns']
+            for rule in rules[i]:
+                lhs, rhs = rule.split('-->')
+                if lhs == 'IdentifierNTNt_33':
+                    print('-----------'*5)
+                    for rule in rules[i]:
+                        print(rule)
+                    print(' '.join(d['code']))
+                    print(lhs, rhs)
+
+
+        exit()
+
 
     def split_identifier_rule_into_multiple(self, dataset):
         """ The identifier rule is split based on parent state prefix to cut down the
@@ -104,6 +198,16 @@ class JavaDatasetReader(DatasetReader):
                         new_rules[-1].append(IdentifierOther + '-->' + rhs)
                 else:
                     new_rules[-1].append(rule)
+
+            # last = new_rules[-1]
+            # for rule in last:
+            #     if rule == 'IdentifierNTPrimary-->String':
+            #         print(' '.join(d['nl']))
+            #         print(' '.join(d['code']))
+            #         for rule2 in last:
+            #             print(rule2)
+            #         exit()
+
         return new_rules
 
     def get_global_rule_fields(self, rules):
@@ -254,7 +358,7 @@ class JavaDatasetReader(DatasetReader):
             lhs2trimmedrhs[nt].append(UNK)
             # A DUMMY action is added for when UNK's are removed during test time
             # to prevent the number of embedded actions from being 0.
-            lhs2trimmedrhs[nt].append(DUMMY)
+            # lhs2trimmedrhs[nt].append(DUMMY)
 
         return lhs2trimmedrhs
 
@@ -270,6 +374,7 @@ class JavaDatasetReader(DatasetReader):
         # todo(rajas): handle types like List<String>. ideally this should
         # map to 3 types
 
+
         entities = []
         entity_text = {}
         neighbors = defaultdict(list)
@@ -278,33 +383,43 @@ class JavaDatasetReader(DatasetReader):
             entity = 'sriniclass_' + name
             entities.append(entity)
             entity_text[entity] = name
-
             entity2isType[entity] = False
-            entity2isType[type] = True
 
-            if type not in entities:
-                # We don't want to add the same type such as "Object" repeatedly.
-                entities.append(type)
-                entity_text[type] = type
-            neighbors[entity].append(type)
-            neighbors[type].append(entity)
+            split_types = self.split_type(type)
+            for t in split_types:
+                entity2isType[t] = True
+
+                if t not in entities:
+                    # We don't want to add the same type such as "Object" repeatedly.
+                    entities.append(t)
+                    entity_text[t] = t
+                neighbors[entity].append(t)
+                neighbors[t].append(entity)
         for name, type in zip(method_names, method_types):
             entity = 'srinifunc_' + name
             entities.append(entity)
             entity_text[entity] = name
-
             entity2isType[entity] = False
-            entity2isType[type] = True
 
-            if type not in entities:
-                entities.append(type)
-                entity_text[type] = type
-            neighbors[entity].append(type)
-            neighbors[type].append(entity)
+            split_types = self.split_type(type)
+            for t in split_types:
+                entity2isType[t] = True
+
+                if t not in entities:
+                    # We don't want to add the same type such as "Object" repeatedly.
+                    entities.append(t)
+                    entity_text[t] = t
+                neighbors[entity].append(t)
+                neighbors[t].append(entity)
 
         # neighbors = {entity: [] for entity in entity_text}
         knowledge_graph = KnowledgeGraph(entities=entities, entity_text=entity_text, neighbors=neighbors)
         return knowledge_graph, entity2isType
+
+    def split_type(self, type):
+        # Split List<String> into [List, String]
+        types = re.split('[^a-zA-Z0-9]', type)
+        return [t for t in types if t != '']
 
     def get_java_class_specific_rules(self, knowledge_graph: KnowledgeGraph, entity2isType):
         # todo(rajas): clean this method up, ideally entity2isType should be part of the knowledge graph.

@@ -54,6 +54,26 @@ class TestJavaDatasetReader:
         assert reader.split_camel_case('_compute') == ['_compute']
         assert reader.split_camel_case('LOG') == ['log']
 
+    def test_split_types(self):
+        reader = JavaDatasetReader.from_params(Params({
+            "utterance_indexers": {"tokens": {"namespace": "utterance"}},
+            "type_indexers": {"tokens": {"namespace": "type"}},
+            "min_identifier_count": 3,
+            "num_dataset_instances": -1,
+            "linking_feature_extractors": [
+                "exact_token_match",
+                "contains_exact_token_match",
+                "edit_distance",
+                "span_overlap_fraction"
+            ]
+        }))
+
+        assert reader.split_type('FileReader') == ['FileReader']
+        assert reader.split_type('List<String>') == ['List', 'String']
+        assert reader.split_type('byte[]') == ['byte']
+        assert reader.split_type('Deque<Map<String,Object>>') == ['Deque','Map','String','Object']
+        assert reader.split_type('Object[][]') == ['Object']
+        assert reader.split_type('ITrace2D') == ['ITrace2D']
 
     def test_split_identifier_rule_into_multiple(self):
         reader = JavaDatasetReader.from_params(Params({
