@@ -53,6 +53,30 @@ const parserExamples = [
     },
     {
       table: "Variables:\n" +
+      "topShelf (List&ltPotion&gt)\n" +
+      "bottomShelf (List&ltPotion&gt)\n" +
+      "LOGGER (Logger)\n" +
+      "Methods:\n" +
+      "getBottomShelf (List&ltPotion&gt)\n" +
+      "enumerate (void)\n" +
+      "fillShelves (void)",
+      question: "Get a read-only list of all the items on the top shelf potion",
+    },
+    {
+      table: "Variables:\n" +
+      "inputInfo (String)\n" +
+      "outputMessage (String)\n" +
+      "validatorErrorMessage (List&ltString&gt)\n" +
+      "Methods:\n" +
+      "getInputInfo (String)\n" +
+      "setValidatorErrorMessage (void)\n" +
+      "getOutputMessage (String)\n" +
+      "setInputInfo (void)\n" +
+      "setOutputMessage (void)",
+      question: "Gets the validator error message .",
+    },
+    {
+      table: "Variables:\n" +
       "classLoader (ClassLoader)\n" +
       "discovery (DiscoverClasses)\n" +
       "useContextClassLoader (boolean)\n" +
@@ -198,11 +222,11 @@ render() {
             </div>
             <div className="form__field">
             <label htmlFor="#input--mc-passage">Table</label>
-            <textarea onChange={this.handleTableChange} id="input--mc-passage" type="text" required="true" autoFocus="true" placeholder="E.g. &quot;Season\tLevel\tDivision\tSection\tPosition\tMovements\n1993\tTier 3\tDivision 2\tÖstra Svealand\t1st\tPromoted\n1994\tTier 2\tDivision 1\tNorra\t11th\tRelegation Playoffs\n&quot;" value={tableValue} disabled={outputState === "working"}></textarea>
+            <textarea onChange={this.handleTableChange} id="input--mc-passage" type="text" required="true" autoFocus="true" placeholder="A java class. Select from dropdown for example." value={tableValue} disabled={outputState === "working"}></textarea>
             </div>
             <div className="form__field">
             <label htmlFor="#input--mc-question">Question</label>
-            <input onChange={this.handleQuestionChange} id="input--mc-question" type="text" required="true" value={questionValue} placeholder="E.g. &quot;What is the only year with the 1st position?&quot;" disabled={outputState === "working"} />
+            <input onChange={this.handleQuestionChange} id="input--mc-question" type="text" required="true" value={questionValue} placeholder="An utterance." disabled={outputState === "working"} />
             </div>
             <div className="form__field form__field--btn">
             <Button enabled={outputState !== "working"} runModel={runParser} inputs={parserInputs} />
