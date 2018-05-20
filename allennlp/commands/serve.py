@@ -30,7 +30,12 @@ from allennlp.service.predictors import DemoModel
 # will be served at the `/predict/<name-of-task>` API endpoint.
 DEFAULT_MODELS = {
         'java-parser': DemoModel(
-                'java-models/type-linking-with-extra-dataset/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/type-linking-with-extra-dataset/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/type-linking-no-mixture/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/type-linking-only-enviro-types-no-unks/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/temp2/model.tar.gz',  # pylint: disable=line-too-long
+                'java-models/type-linking-only-enviro-types-no-unks-type-split-no-num-split-100000/model.tar.gz',  # pylint: disable=line-too-long the best one
+                # 'java-models/type-linking-only-enviro-types-no-unks-type-split-no-num-split-30000/model.tar.gz',  # pylint: disable=line-too-long
                 'java-parser'
         ),
         # 'wikitables-parser': DemoModel(
