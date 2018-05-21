@@ -53,6 +53,7 @@ class TestJavaDatasetReader:
         assert reader.split_camel_case('isParsedWell') == ['isparsedwell', 'is', 'parsed', 'well']
         assert reader.split_camel_case('_compute') == ['_compute']
         assert reader.split_camel_case('LOG') == ['log']
+        assert reader.split_camel_case('setDirectionA') == ['set', 'direction', 'a']
 
     def test_split_types(self):
         reader = JavaDatasetReader.from_params(Params({

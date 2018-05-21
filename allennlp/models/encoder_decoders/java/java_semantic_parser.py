@@ -4,6 +4,8 @@ from typing import Dict, Tuple, List, Set, Any
 import gc
 import re
 
+import os
+
 from allennlp.training.metrics import Average
 from overrides import overrides
 
@@ -398,10 +400,17 @@ class JavaSemanticParser(Model):
         f.close()
 
     def _log_predictions(self, metadata, pred_code, batch):
-        codef = open('debug/pred_target_code.txt', 'a')
-        em_correct = open('debug/em_correct.txt', 'a')
-        em_incorrect = open('debug/em_incorrect.txt', 'a')
-        codef.write("batch, " + str(batch) + '\n')
+        # codef.write("batch, " + str(batch) + '\n')
+
+        if getattr(self, '_on_extra', None) is not None:
+            datasetname = 'valid' if not self._on_extra else 'extra'
+            em_correct = open(os.path.join(self._serialization_dir, 'epoch%d-%s-em_correct.txt' %(self._epoch_num, datasetname)), 'a')
+            em_incorrect = open(os.path.join(self._serialization_dir, 'epoch%d-%s-em_incorrect.txt' %(self._epoch_num, datasetname)), 'a')
+            codef = open(os.path.join(self._serialization_dir, 'epoch%d-%s-all-preds.txt' %(self._epoch_num, datasetname)), 'a')
+        else:
+            em_correct = open('debug/em_correct.txt', 'a')
+            em_incorrect = open('debug/em_incorrect.txt', 'a')
+            codef = open('debug/pred_target_code.txt', 'a')
 
         log = '==============' * 4 + '\n'
         log += 'NL:' + ' '.join(metadata['utterance']) + '\n'
@@ -414,15 +423,15 @@ class JavaSemanticParser(Model):
         log += 'Prediction====\n'
         log += ' '.join(pred_code) + '\n'
         print(log)
-        codef.write(log)
-        codef.close()
 
+        codef.write(log)
         if metadata['code'] == pred_code:
             em_correct.write(log)
         else:
             em_incorrect.write(log)
         em_correct.close()
         em_incorrect.close()
+        codef.close()
 
     def combine_name_types(self, names, types):
         combine_str = ""

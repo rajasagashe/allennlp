@@ -699,6 +699,12 @@ class Trainer:
             train_metrics = self._train_epoch(epoch)
 
             if self._validation_data is not None:
+                # Set the model epoch and output dir so model can output
+                # the predictions to appropriate file.
+                self._model._epoch_num = epoch
+                self._model._serialization_dir = self._serialization_dir
+                self._model._on_extra = False
+
                 # We have a validation set, so compute all the metrics on it.
                 val_loss, num_batches = self._validation_loss()
                 val_metrics = self._get_metrics(val_loss, num_batches, reset=True)
@@ -725,12 +731,14 @@ class Trainer:
                 # It'd be nice to write the predictions into the model dir, but the
                 # model doesn't know where this is :(.
                 # results_path = os.path.join(self._serialization_dir, "pred_target_code.txt")
-                codef = open('debug/pred_target_code.txt', 'w+')
-                codef.write('Targ and Predicted Code\n')
-                codef.close()
+                self._model._on_extra = True
+
+                # codef = open('debug/pred_target_code.txt', 'w+')
+                # codef.write('Targ and Predicted Code\n')
+                # codef.close()
 
                 # We have a small piece of data to evaluate on. This contains
-                # low hanging fruit so metrics should be high.
+                # interesting, handpicked examples.
                 extra_loss, num_batches = self._extra_data_loss()
                 extra_metrics = self._get_metrics(extra_loss, num_batches, reset=True)
 
