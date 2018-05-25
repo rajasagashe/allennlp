@@ -1,5 +1,6 @@
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
+from copy import deepcopy
 
 import time
 from overrides import overrides
@@ -15,6 +16,7 @@ from allennlp.common.util import timeit, debug_print
 from allennlp.nn import util
 from allennlp.modules import Attention, FeedForward, Embedding
 from allennlp.modules.similarity_functions import SimilarityFunction
+from allennlp.modules.similarity_functions import CosineSimilarity
 from allennlp.common.checks import check_dimensions_match
 
 from allennlp.nn.decoding import RnnState, DecoderStep
@@ -26,6 +28,7 @@ from allennlp.models.encoder_decoders.java.java_decoder_state import JavaDecoder
 # from java_programmer.allennlp_in_progress.decoder_step import DecoderStep
 # from java_programmer.allennlp_in_progress.rnn_state import RnnState
 # from allennlp.nn.decoding import DecoderStep, RnnState
+from allennlp.nn.util import batched_index_select
 
 
 class JavaDecoderStep(DecoderStep[JavaDecoderState]):
@@ -60,12 +63,13 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # `action_embedding_dim` to make a prediction.
         self._output_projection_layer = Linear(output_dim + encoder_output_dim, action_embedding_dim)
 
+        self.utt_sim_linear = Linear(1, 1)
         # TODO(pradeep): Do not hardcode decoder cell type.
         self._decoder_cell = LSTMCell(input_dim, output_dim)
 
         if mixture_feedforward is not None:
-            check_dimensions_match(output_dim, mixture_feedforward.get_input_dim(),
-                                   "hidden state embedding dim", "mixture feedforward input dim")
+            # check_dimensions_match(output_dim, mixture_feedforward.get_input_dim(),
+            #                        "hidden state embedding dim", "mixture feedforward input dim")
             check_dimensions_match(mixture_feedforward.get_output_dim(), 1,
                                    "mixture feedforward output dim", "dimension for scalar value")
 
@@ -115,10 +119,23 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # (group_size, encoder_output_dim)
         encoder_outputs = torch.stack([state.rnn_state[0].encoder_outputs[i] for i in state.batch_indices])
         encoder_output_mask = torch.stack([state.rnn_state[0].encoder_output_mask[i] for i in state.batch_indices])
+
+        proto_rules_encoder_outputs = torch.stack([state.rnn_state[0].proto_rules_encoder_outputs[i] for i in state.batch_indices])
+        proto_rules_encoder_output_mask = torch.stack([state.rnn_state[0].proto_rules_encoder_output_mask[i] for i in state.batch_indices])
+
+        utt_final_encoder_outputs = torch.stack([state.rnn_state[0].utt_final_encoder_outputs[i] for i in state.batch_indices])
+        proto_utt_final_encoder_outputs= torch.stack([state.rnn_state[0].proto_utt_final_encoder_outputs[i] for i in state.batch_indices])
+
+
         attended_question, attention_weights = self.attend_on_question(hidden_state,
                                                                        encoder_outputs,
                                                                        encoder_output_mask.float())
 
+        attended_proto_rules, proto_attention_weights = self.attend_on_question(attended_question,
+                                                         proto_rules_encoder_outputs,
+                                                         proto_rules_encoder_output_mask.float())
+        # mod rajas
+        attended_question = attended_proto_rules
 
         # To predict an action, we'll use a concatenation of the hidden state and attention over
         # the question.  We'll just predict an _embedding_, which we will compare to embedded
@@ -143,6 +160,77 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         else:
             considered_actions, actions_to_embed, actions_to_link = self._get_actions_to_consider(state)
 
+
+        max_num_actions = max([len(action_list) for action_list in actions_to_embed])
+        padded_actions = [common_util.pad_sequence_to_length(action_list, max_num_actions)
+                          for action_list in actions_to_embed]
+        proto_action_indices = deepcopy(padded_actions)
+        proto_mask_indices = deepcopy(padded_actions)
+        max_len = 0
+        start1 = time.time()
+        for group_index, actions in enumerate(padded_actions):
+            # proto_action_indices.append([])
+            for i, a in enumerate(actions):
+                # initialization to cut down padding overhead
+                indices = [0] * (len(state.proto_actions)/5)
+                mask_indices = [0] * (len(state.proto_actions)/5)
+                if a != 0:
+                    # print(state.proto_actions[group_index])
+                    for j, a2 in enumerate(state.proto_actions[group_index]):
+                        if a2 == 0:
+                            break
+                        if a == a2:
+                            indices.append(j)
+
+                            if state.proto_mask[group_index][j] == 0:
+                                mask_indices.append(0)
+                            else:
+                                mask_indices.append(1)
+                proto_action_indices[group_index][i] = indices
+                proto_mask_indices[group_index][i] = mask_indices
+
+
+                temp = len(indices)
+                if len(indices) > max_len:
+                    max_len = len(indices)
+                # if len(actions) > 300:
+                #     break
+        end1 = time.time()
+        for group_actions, mask_actions in zip(proto_action_indices, proto_mask_indices):
+            for i in range(len(group_actions)):
+                group_actions[i] = common_util.pad_sequence_to_length(group_actions[i], max_len)
+                mask_actions[i] = common_util.pad_sequence_to_length(mask_actions[i], max_len)
+        end2 = time.time()
+        # print("Time for constructing action indices", (end1 - start1)*1000)
+        # print("Time for padding", (end2-end1)*1000)
+        if max_len != 0:
+            # (group_size, num_actions, max_num_proto_occurrences)
+            end3 = time.time()
+            proto_action_tensor = Variable(state.score[0].data.new(proto_action_indices).long())
+            proto_mask_tensor = Variable(state.score[0].data.new(proto_mask_indices).long())
+            end4 = time.time()
+            # (group_size, num_actions, max_num_proto_occurrences, 1)
+
+            proto_attention = batched_index_select(proto_attention_weights.unsqueeze(-1), proto_action_tensor)
+
+            end5 = time.time()
+            # print("Time for initialization", (end4 - end3) * 1000)
+            # print("Time for batched index select", (end5 - end4) * 1000)
+            proto_attention = proto_attention.squeeze(-1)
+            # In the case where an action doesn't appear in the prototype, it'll just be a list
+            # with 0's up to max_len and this will be filled with a valid attention value. Thus
+            # We need to mask this.
+            proto_attention = proto_attention * proto_mask_tensor.float()
+            summed_proto_attention = torch.sum(proto_attention, dim=-1)
+
+            # cosine similarity over the utternaces
+            cosine_sim = CosineSimilarity()
+            utt_similarity = cosine_sim(proto_utt_final_encoder_outputs, utt_final_encoder_outputs)
+
+            x = self.utt_sim_linear(utt_similarity.unsqueeze(-1))#.squeeze(-1)
+            summed_proto_attention = x * summed_proto_attention
+
+
         num_actions = [len(action_list) for action_list in actions_to_embed]
         max_num_actions = max(num_actions)
         if max_num_actions != 0:
@@ -155,6 +243,12 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             # `bmm` and some squeezing.
             # Shape: (group_size, num_embedded_actions)
             embedded_action_logits = action_embeddings.bmm(predicted_action_embedding.unsqueeze(-1)).squeeze(-1)
+
+            # mod rajas
+            if max_len != 0:
+                # print("embedded", embedded_action_logits.size())
+                # print(summed_proto_attention.size())
+                embedded_action_logits = embedded_action_logits + summed_proto_attention
 
             if actions_to_link:
                 # entity_action_logits: (group_size, num_entity_actions)
@@ -651,7 +745,12 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                          attended_question[group_index],
                                          state.rnn_state[group_index].encoder_outputs,
                                          state.rnn_state[group_index].encoder_output_mask,
-                                         new_parent_states)
+                                         new_parent_states,
+                                         state.rnn_state[group_index].proto_rules_encoder_outputs,
+                                         state.rnn_state[group_index].proto_rules_encoder_output_mask,
+                                         utt_final_encoder_outputs=state.rnn_state[group_index].utt_final_encoder_outputs,
+                                         proto_utt_final_encoder_outputs=state.rnn_state[group_index].proto_utt_final_encoder_outputs
+                                         )
 
                 new_state = JavaDecoderState(batch_indices=[batch_index],
                                              action_history=[new_action_history],
@@ -663,6 +762,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                              possible_actions=state.possible_actions,
                                              flattened_linking_scores=state.flattened_linking_scores,
                                              actions_to_entities=state.actions_to_entities,
+                                             proto_actions=[state.proto_actions[group_index]],
+                                             proto_mask=[state.proto_mask[group_index]],
                                              # entity_types=state.entity_types,
                                              debug_info=new_debug_info)
                 new_states.append(new_state)
@@ -722,7 +823,13 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                      attended_question[group_index],
                                      state.rnn_state[group_index].encoder_outputs,
                                      state.rnn_state[group_index].encoder_output_mask,
-                                     new_parent_states)
+                                     new_parent_states,
+                                     state.rnn_state[group_index].proto_rules_encoder_outputs,
+                                     state.rnn_state[group_index].proto_rules_encoder_output_mask,
+                                     utt_final_encoder_outputs=state.rnn_state[group_index].utt_final_encoder_outputs,
+                                     proto_utt_final_encoder_outputs=state.rnn_state[
+                                         group_index].proto_utt_final_encoder_outputs
+                                     )
 
             new_state = JavaDecoderState(batch_indices=[batch_index],
                                          action_history=[new_action_history],
@@ -734,6 +841,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                          possible_actions=state.possible_actions,
                                          flattened_linking_scores=state.flattened_linking_scores,
                                          actions_to_entities=state.actions_to_entities,
+                                         proto_actions=[state.proto_actions[group_index]],
+                                         proto_mask=[state.proto_mask[group_index]],
                                          # entity_types=state.entity_types,
                                          debug_info=None)
             new_states.append(new_state)
