@@ -235,6 +235,9 @@ class JavaSemanticParser(Model):
         proto_rules_encoder_output_list = [encoder_proto_out[i] for i in range(batch_size)]
         proto_rules_encoder_mask_list = [proto_mask[i] for i in range(batch_size)]
 
+        proto_utt_encoder_output_list = [proto_utt_encoder_outputs[i] for i in range(batch_size)]
+        proto_utt_encoder_mask_list = [proto_utterance_mask[i] for i in range(batch_size)]
+
         utt_final_encoder_output_list = [final_utt_encoder_output[i] for i in range(batch_size)]
         proto_utt_final_encoder_output_list = [final_proto_utt_encoder_output[i] for i in range(batch_size)]
         # proto_utt_encoder_mask_list = [proto_mask[i] for i in range(batch_size)]
@@ -250,6 +253,8 @@ class JavaSemanticParser(Model):
                                               parent_states=[self._first_action_embedding],
                                               proto_rules_encoder_outputs=proto_rules_encoder_output_list,
                                               proto_rules_encoder_output_mask=proto_rules_encoder_mask_list,
+                                            proto_utt_encoder_outputs=proto_utt_encoder_output_list,
+                                              proto_utt_encoder_output_mask=proto_utt_encoder_mask_list,
                                               utt_final_encoder_outputs=utt_final_encoder_output_list,
                                               proto_utt_final_encoder_outputs=proto_utt_final_encoder_output_list))
 
@@ -333,10 +338,10 @@ class JavaSemanticParser(Model):
                     self._partial_production_rule_accuracy(partial_parse_acc)
                     self._code_bleu(bleu)
                     self._exact_match_accuracy(em)
-                    outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history[0])
+                    outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history)
 
                     outputs['best_action_sequence'].append(pred_rules)
-                    outputs['logical_form'].append(self._gen_code_from_rules(pred_rules))
+                    outputs['logical_form'].append(self.indent(self._gen_code_from_rules(pred_rules)))
                     # print('best final states', best_final_states[i][0])
                     # print('best final states', best_final_states[i][0].debug_info)
 
@@ -376,6 +381,7 @@ class JavaSemanticParser(Model):
                 action_info['considered_actions'] = considered_actions
                 action_info['action_probabilities'] = probabilities
                 action_info['question_attention'] = action_debug_info['question_attention']
+                action_info['prototype_attention'] = action_debug_info['prototype_attention']
                 instance_action_info.append(action_info)
             batch_action_info.append(instance_action_info)
         output_dict["predicted_actions"] = batch_action_info
@@ -477,6 +483,7 @@ class JavaSemanticParser(Model):
             codef = open('debug/pred_target_code.txt', 'a')
 
         log = '==============' * 4 + '\n'
+        log += metadata['path'] + '\n'
         # log += 'Variables:\n'
         # log += self.combine_name_types(metadata['variableNames'], metadata['variableTypes'])
         # log += 'Methods:\n'

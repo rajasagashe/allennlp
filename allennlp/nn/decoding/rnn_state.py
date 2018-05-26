@@ -51,6 +51,8 @@ class RnnState:
                  parent_states: List[torch.Tensor] = None,
                  proto_rules_encoder_outputs: List[torch.Tensor] = None,
                  proto_rules_encoder_output_mask: List[torch.Tensor] = None,
+                 proto_utt_encoder_outputs: List[torch.Tensor] = None,
+                 proto_utt_encoder_output_mask: List[torch.Tensor] = None,
                  utt_final_encoder_outputs: List[torch.Tensor] = None,
                  proto_utt_final_encoder_outputs: List[torch.Tensor] = None
                  ) -> None:
@@ -64,6 +66,9 @@ class RnnState:
 
         self.proto_rules_encoder_outputs = proto_rules_encoder_outputs
         self.proto_rules_encoder_output_mask = proto_rules_encoder_output_mask
+
+        self.proto_utt_encoder_outputs = proto_utt_encoder_outputs
+        self.proto_utt_encoder_output_mask = proto_utt_encoder_output_mask
 
         self.utt_final_encoder_outputs = utt_final_encoder_outputs
         self.proto_utt_final_encoder_outputs = proto_utt_final_encoder_outputs
