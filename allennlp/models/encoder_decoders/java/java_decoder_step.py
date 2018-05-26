@@ -64,6 +64,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         self._output_projection_layer = Linear(output_dim + encoder_output_dim, action_embedding_dim)
 
         self.utt_sim_linear = Linear(1, 1)
+        self.hidden_copy_proto_rule_mlp = Linear(encoder_output_dim, 1)
+
         # TODO(pradeep): Do not hardcode decoder cell type.
         self._decoder_cell = LSTMCell(input_dim, output_dim)
 
@@ -123,15 +125,25 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         proto_rules_encoder_outputs = torch.stack([state.rnn_state[0].proto_rules_encoder_outputs[i] for i in state.batch_indices])
         proto_rules_encoder_output_mask = torch.stack([state.rnn_state[0].proto_rules_encoder_output_mask[i] for i in state.batch_indices])
 
+        proto_utt_encoder_outputs = torch.stack(
+            [state.rnn_state[0].proto_utt_encoder_outputs[i] for i in state.batch_indices])
+        proto_utt_encoder_output_mask = torch.stack(
+            [state.rnn_state[0].proto_utt_encoder_output_mask[i] for i in state.batch_indices])
+
         utt_final_encoder_outputs = torch.stack([state.rnn_state[0].utt_final_encoder_outputs[i] for i in state.batch_indices])
         proto_utt_final_encoder_outputs= torch.stack([state.rnn_state[0].proto_utt_final_encoder_outputs[i] for i in state.batch_indices])
 
+        attended_proto_utt, _ = self.attend_on_question(hidden_state,
+                                                        proto_utt_encoder_outputs,
+                                                        proto_utt_encoder_output_mask.float())
 
         attended_question, attention_weights = self.attend_on_question(hidden_state,
                                                                        encoder_outputs,
                                                                        encoder_output_mask.float())
 
-        attended_proto_rules, proto_attention_weights = self.attend_on_question(attended_question,
+        # recent changes mod r
+        # proto attention is not function of the attened question
+        attended_proto_rules, proto_attention_weights = self.attend_on_question(hidden_state,
                                                          proto_rules_encoder_outputs,
                                                          proto_rules_encoder_output_mask.float())
         # mod rajas
@@ -146,14 +158,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         predicted_action_embedding = self._dropout(self._output_projection_layer(action_query))
         end_decoding = time.time()
 
-        # print(state.grammar_state[0]._nonterminal_stack[-1])
-        # print('--------------')
-        # for gs in state.grammar_state:
-        #     print(gs._nonterminal_stack[-1])
-        # if state.grammar_state[0]._nonterminal_stack[-1] == 'IdentifierNTClassOrInterfaceType':
-        #     print('yo')
-
-
         if allowed_actions is not None:
             actions_to_embed, actions_to_link, allowed_logit_indices = self._get_actions_to_consider_optimized(state, allowed_actions)
             considered_actions = None
@@ -163,12 +167,16 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         action_attention_indices, action_attention_mask, action_indices = self.get_action_prototype_attention_indices(state, actions_to_embed)
 
         summed_proto_attention = self.get_summed_proto_action_attention(
+                                          hidden_state,
                                           action_attention_indices,
                                           action_attention_mask,
                                           action_indices,
                                           proto_attention_weights,
-                                          utt_final_encoder_outputs,
-                                          proto_utt_final_encoder_outputs)
+                                          attended_question,
+                                          attended_proto_utt)
+                                          # recent changes mod r
+                                          #utt_final_encoder_outputs,
+                                          #proto_utt_final_encoder_outputs)
 
 
         num_actions = [len(action_list) for action_list in actions_to_embed]
@@ -185,9 +193,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             embedded_action_logits = action_embeddings.bmm(predicted_action_embedding.unsqueeze(-1)).squeeze(-1)
 
             # mod rajas
-            # if max_len != 0:
-                # print("embedded", embedded_action_logits.size())
-                # print(summed_proto_attention.size())
             embedded_action_logits.scatter_add_(dim=1, index=action_indices, src=summed_proto_attention)
             # embedded_action_logits = embedded_action_logits + summed_proto_attention
 
@@ -263,6 +268,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                             max_actions=max_actions)
 
     def get_summed_proto_action_attention(self,
+                                          hidden_state,
                                           action_attention_indices,
                                           action_attention_mask,
                                           action_indices,
@@ -289,6 +295,9 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         utt_similarity = cosine_sim(proto_utt_final_encoder_outputs, utt_final_encoder_outputs)
 
         x = self.utt_sim_linear(utt_similarity.unsqueeze(-1))  # .squeeze(-1)
+        # recent changes mod r
+        y = torch.nn.functional.relu(self.hidden_copy_proto_rule_mlp(hidden_state))
+        x = x * y
         summed_proto_attention = x * summed_proto_attention
         return summed_proto_attention
 
@@ -770,6 +779,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                          state.rnn_state[group_index].proto_rules_encoder_output_mask,
                                          utt_final_encoder_outputs=state.rnn_state[group_index].utt_final_encoder_outputs,
                                          proto_utt_final_encoder_outputs=state.rnn_state[group_index].proto_utt_final_encoder_outputs,
+                                         proto_utt_encoder_outputs=state.rnn_state[group_index].proto_utt_encoder_outputs,
+                                         proto_utt_encoder_output_mask=state.rnn_state[group_index].proto_utt_encoder_output_mask
                                          )
 
                 new_state = JavaDecoderState(batch_indices=[batch_index],
@@ -848,7 +859,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                      state.rnn_state[group_index].proto_rules_encoder_output_mask,
                                      utt_final_encoder_outputs=state.rnn_state[group_index].utt_final_encoder_outputs,
                                      proto_utt_final_encoder_outputs=state.rnn_state[
-                                         group_index].proto_utt_final_encoder_outputs
+                                         group_index].proto_utt_final_encoder_outputs,
+                                     proto_utt_encoder_outputs=state.rnn_state[group_index].proto_utt_encoder_outputs,
+                                     proto_utt_encoder_output_mask=state.rnn_state[
+                                         group_index].proto_utt_encoder_output_mask
                                      )
 
             new_state = JavaDecoderState(batch_indices=[batch_index],
