@@ -13,6 +13,17 @@ import ModelIntro from './ModelIntro'
 *******************************************************************************/
 
 const parserExamples = [
+
+    {
+      table: "closeConnection\n" +
+             "repo_15924632/modules/components/org.wso2.carbon.appfactory.core/src/main/java/org/wso2/carbon/appfactory/core/util/AppFactoryDBUtil.java",
+      question: "Returns the debug .",
+    },
+    {
+      table: "hasGingerbread\n" +
+            "repo_37673/core/src/in/srain/cube/util/Version.java",
+      question: "Returns the debug .",
+    },
     {
       table: "Variables:\n" +
               "warn (Object)\n" +
@@ -243,7 +254,7 @@ render() {
 
 class JavaOutput extends React.Component {
     render() {
-      const { answer, logicalForm, actions, linking_scores, feature_scores, similarity_scores, entities, question_tokens } = this.props;
+      const { answer, logicalForm, actions, linking_scores, feature_scores, similarity_scores, entities, question_tokens, prototype_rules } = this.props;
 
       return (
         <div className="model__content">
@@ -262,21 +273,21 @@ class JavaOutput extends React.Component {
               <Collapsible trigger="Predicted actions">
                 {actions.map((action, action_index) => (
                   <Collapsible key={"action_" + action_index} trigger={action['predicted_action']}>
-                    <ActionInfo action={action} question_tokens={question_tokens}/>
+                    <ActionInfo action={action} question_tokens={question_tokens} prototype_rules={prototype_rules}/>
                   </Collapsible>
                 ))}
               </Collapsible>
               <Collapsible trigger="Entity linking scores">
                   <HeatMap xLabels={question_tokens} yLabels={entities} data={linking_scores} xLabelWidth="250px" />
               </Collapsible>
-              {feature_scores &&
-                <Collapsible trigger="Entity linking scores (features only)">
-                    <HeatMap xLabels={question_tokens} yLabels={entities} data={feature_scores} xLabelWidth="250px" />
-                </Collapsible>
-              }
-              <Collapsible trigger="Entity linking scores (similarity only)">
-                  <HeatMap xLabels={question_tokens} yLabels={entities} data={similarity_scores} xLabelWidth="250px" />
-              </Collapsible>
+              {/*{feature_scores &&*/}
+                {/*<Collapsible trigger="Entity linking scores (features only)">*/}
+                    {/*<HeatMap xLabels={question_tokens} yLabels={entities} data={feature_scores} xLabelWidth="250px" />*/}
+                {/*</Collapsible>*/}
+              {/*}*/}
+              {/*<Collapsible trigger="Entity linking scores (similarity only)">*/}
+                  {/*<HeatMap xLabels={question_tokens} yLabels={entities} data={similarity_scores} xLabelWidth="250px" />*/}
+              {/*</Collapsible>*/}
             </Collapsible>
           </div>
         </div>
@@ -287,17 +298,31 @@ class JavaOutput extends React.Component {
 
 class ActionInfo extends React.Component {
   render() {
-    const { action, question_tokens } = this.props;
+    const { action, question_tokens, prototype_rules } = this.props;
     const action_string = action['predicted_action'];
     const question_attention = action['question_attention'].map(x => [x]);
     const considered_actions = action['considered_actions'];
     const action_probs = action['action_probabilities'].map(x => [x]);
+    const prototype_attention = action['prototype_attention'].map(x => [x]);
+
+    console.log("ActionInfo");
+    console.log(question_tokens);
+    console.log(prototype_rules);
+    // console.log(action_string);
+    // console.log(question_attention);
+    // console.log(considered_actions);
+    // console.log(action_probs);
 
     return (
       <div>
         <div className="heatmap">
           <HeatMap xLabels={['Prob']} yLabels={considered_actions} data={action_probs} xLabelWidth="250px" />
         </div>
+
+        <div className="heatmap">
+          <HeatMap xLabels={['Prob']} yLabels={prototype_rules} data={prototype_attention} xLabelWidth="70px" />
+        </div>
+
         <div className="heatmap">
           <HeatMap xLabels={['Prob']} yLabels={question_tokens} data={question_attention} xLabelWidth="70px" />
         </div>
@@ -374,6 +399,8 @@ class _JavaComponent extends React.Component {
       const similarity_scores = responseData && responseData.similarity_scores;
       const entities = responseData && responseData.entities;
       const question_tokens = responseData && responseData.question_tokens;
+      const prototype_rules = responseData && responseData.prototype_rules;
+      // console.log()
       console.log("");
 
       return (
@@ -393,6 +420,7 @@ class _JavaComponent extends React.Component {
                               similarity_scores={similarity_scores}
                               entities={entities}
                               question_tokens={question_tokens}
+                              prototype_rules={prototype_rules}
             />
           </PaneRight>
         </div>

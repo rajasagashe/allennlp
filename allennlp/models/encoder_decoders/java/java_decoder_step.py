@@ -259,7 +259,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                             considered_actions,
                                             allowed_actions,
                                             self._identifier_literal_action_embedding,
-                                            max_actions)
+                                            prototype_attention_weights=proto_attention_weights,
+                                            max_actions=max_actions)
 
     def get_summed_proto_action_attention(self,
                                           action_attention_indices,
@@ -667,6 +668,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                             considered_actions: List[List[int]],
                             allowed_actions: List[Set[int]],
                             identifier_literal_action_embedding: torch.Tensor,
+                            prototype_attention_weights: torch.Tensor,
                             max_actions: int = None) -> List[JavaDecoderState]:
         # Each group index here might get accessed multiple times, and doing the slicing operation
         # each time is more expensive than doing it once upfront.  These three lines give about a
@@ -750,6 +752,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                     debug_info = {
                             'considered_actions': considered_actions[group_index],
                             'question_attention': attention_weights[group_index],
+                            'prototype_attention': prototype_attention_weights[group_index],
                             'probabilities': probs_cpu[group_index],
                             }
                     new_debug_info = [state.debug_info[group_index] + [debug_info]]
@@ -766,7 +769,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                          state.rnn_state[group_index].proto_rules_encoder_outputs,
                                          state.rnn_state[group_index].proto_rules_encoder_output_mask,
                                          utt_final_encoder_outputs=state.rnn_state[group_index].utt_final_encoder_outputs,
-                                         proto_utt_final_encoder_outputs=state.rnn_state[group_index].proto_utt_final_encoder_outputs
+                                         proto_utt_final_encoder_outputs=state.rnn_state[group_index].proto_utt_final_encoder_outputs,
                                          )
 
                 new_state = JavaDecoderState(batch_indices=[batch_index],
