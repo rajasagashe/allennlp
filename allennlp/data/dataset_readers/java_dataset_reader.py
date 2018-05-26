@@ -120,14 +120,6 @@ class JavaDatasetReader(DatasetReader):
                 # No class field/func identifier rules since these cannot be embedded
                 if rule not in global_rule2index:
                     rules[i] = PLAIN_IDENTIFIER_RULE
-                # if IdentifierNT in lhs and 'srini' in rhs:
-                #     rules[i] = PLAIN_IDENTIFIER_RULE
-
-        # types = self.get_types_used_frequently_even_if_not_in_class(modified_rules, dataset)
-
-        # self.experiment_type(modified_rules, dataset)
-        # self.experiment_nt33(modified_rules, dataset)
-
 
         logger.info("Reading the dataset")
         for i, record in enumerate(dataset):
@@ -138,15 +130,17 @@ class JavaDatasetReader(DatasetReader):
                                              record['methodReturns'],
                                              global_production_rule_fields,
                                              global_rule2index,
-                                             record['code'],
+
                                              # Pass the modified identifier rules.
-                                             modified_rules[i],
+                                             rules=modified_rules[i],
                                              proto_rules=prototype_rules[i],
                                              proto_tokens=record['prototype_nl'],
                                              proto_code=record['prototype_code'],
                                              proto_og_rules=og_prototype_rules[i],
                                              protoMethodName=record['prototype_methodName'],
-                                             methodName=record['methodName'])
+                                             methodName=record['methodName'],
+                                             code=record['code'],
+                                             path=record['path'])
             yield instance
 
     def get_types_used_frequently_even_if_not_in_class(self, rules, dataset):
@@ -283,7 +277,8 @@ class JavaDatasetReader(DatasetReader):
                          proto_code: List[str] = None,
                          proto_og_rules:List[str] = None,
                          protoMethodName: str = None,
-                         methodName: str = None
+                         methodName: str = None,
+                         path: str = None
                          ) -> Instance:
         fields = {}
 
@@ -294,7 +289,7 @@ class JavaDatasetReader(DatasetReader):
 
 
         # todo(rajas) add camel casing for utterance tokens as well
-        # utterance = [t for word in utterance for t in self.split_camel_case(word)]
+        # utterance = [t for word in utterance for t in self.split_camel_case_add_original(word)]
 
         # toks = ['<CURR>'] + utterance[:10]
         # toks += ['<PROTOTYPE>'] + proto_tokens[:10]
@@ -314,7 +309,8 @@ class JavaDatasetReader(DatasetReader):
                          'methodNames':  method_names,
                          'methodTypes':  method_types,
                          'prototype_methodName': protoMethodName,
-                         'methodName': methodName}
+                         'methodName': methodName,
+                         'path': path}
         if code is not None:
             metadata_dict['code'] = code
             metadata_dict['prototype_code'] = proto_code
@@ -335,7 +331,7 @@ class JavaDatasetReader(DatasetReader):
             # e.g. isParsed -> is, Parsed and isParsed
             # So if the utterance has word parsed, it will appear in the exact text set
             # of knowledge graph field.
-            entity_camel_split = self.split_camel_case(entity_text)
+            entity_camel_split = self.split_camel_case_add_original(entity_text)
             entity_tokens.append([Token(e) for e in entity_camel_split])
 
         # todo(rajas): add a feature that filters out trivial links between utterance
@@ -543,17 +539,21 @@ class JavaDatasetReader(DatasetReader):
         # on camel case then generates a TextField for each one.
         fields: List[Field] = []
         for word in words:
-            tokens = [Token(text=w) for w in self.split_camel_case(word)]
+            tokens = [Token(text=w) for w in self.split_camel_case_add_original(word)]
             fields.append(TextField(tokens, self._utterance_indexers))
         return ListField(fields)
 
-    @staticmethod
-    def split_camel_case(name: str) -> List[str]:
-        # Returns the string and its camel case split version all lowercased.
-        tokens = re.sub('(?!^)([A-Z][a-z]+)', r' \1', name).split()
+    def split_camel_case_add_original(self, name: str) -> List[str]:
+        # Returns the string and its camel case split version.
+        tokens = self.split_camel_case(name)
         if len(tokens) > 1:
             tokens = [name] + tokens
-        tokens = [t.lower() for t in tokens]
+        return tokens
+
+    @staticmethod
+    def split_camel_case(name: str) -> List[str]:
+        # Returns the string and its camel case split version.
+        tokens = re.sub('(?!^)([A-Z][a-z]+)', r' \1', name).split()
         return tokens
 
     @classmethod
