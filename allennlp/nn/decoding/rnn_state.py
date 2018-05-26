@@ -48,7 +48,12 @@ class RnnState:
                  attended_input: torch.Tensor,
                  encoder_outputs: List[torch.Tensor],
                  encoder_output_mask: List[torch.Tensor],
-                 parent_states: List[torch.Tensor] = None) -> None:
+                 parent_states: List[torch.Tensor] = None,
+                 proto_rules_encoder_outputs: List[torch.Tensor] = None,
+                 proto_rules_encoder_output_mask: List[torch.Tensor] = None,
+                 utt_final_encoder_outputs: List[torch.Tensor] = None,
+                 proto_utt_final_encoder_outputs: List[torch.Tensor] = None
+                 ) -> None:
         self.hidden_state = hidden_state
         self.memory_cell = memory_cell
         self.previous_action_embedding = previous_action_embedding
@@ -56,3 +61,9 @@ class RnnState:
         self.encoder_outputs = encoder_outputs
         self.encoder_output_mask = encoder_output_mask
         self.parent_states = parent_states
+
+        self.proto_rules_encoder_outputs = proto_rules_encoder_outputs
+        self.proto_rules_encoder_output_mask = proto_rules_encoder_output_mask
+
+        self.utt_final_encoder_outputs = utt_final_encoder_outputs
+        self.proto_utt_final_encoder_outputs = proto_utt_final_encoder_outputs

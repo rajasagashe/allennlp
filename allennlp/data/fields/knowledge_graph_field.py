@@ -276,6 +276,17 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
     # https://github.com/allenai/pnp/blob/wikitables2/src/main/scala/org/allenai/wikitables/SemanticParserFeatureGenerator.scala
     # pylint: disable=unused-argument,no-self-use
 
+    def _is_in_prototype(self,
+                           entity: str,
+                           entity_text: List[Token],
+                           token: Token,
+                           token_index: int,
+                           tokens: List[Token]) -> float:
+        # todo(rajas) verify this function
+        if entity in self.knowledge_graph.entity2in_prototype:
+            return 1.0
+        return 0.0
+
     def _exact_token_match(self,
                            entity: str,
                            entity_text: List[Token],

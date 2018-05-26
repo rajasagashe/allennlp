@@ -160,75 +160,15 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         else:
             considered_actions, actions_to_embed, actions_to_link = self._get_actions_to_consider(state)
 
+        action_attention_indices, action_attention_mask, action_indices = self.get_action_prototype_attention_indices(state, actions_to_embed)
 
-        max_num_actions = max([len(action_list) for action_list in actions_to_embed])
-        padded_actions = [common_util.pad_sequence_to_length(action_list, max_num_actions)
-                          for action_list in actions_to_embed]
-        proto_action_indices = deepcopy(padded_actions)
-        proto_mask_indices = deepcopy(padded_actions)
-        max_len = 0
-        start1 = time.time()
-        for group_index, actions in enumerate(padded_actions):
-            # proto_action_indices.append([])
-            for i, a in enumerate(actions):
-                # initialization to cut down padding overhead
-                indices = [0] * (len(state.proto_actions)/5)
-                mask_indices = [0] * (len(state.proto_actions)/5)
-                if a != 0:
-                    # print(state.proto_actions[group_index])
-                    for j, a2 in enumerate(state.proto_actions[group_index]):
-                        if a2 == 0:
-                            break
-                        if a == a2:
-                            indices.append(j)
-
-                            if state.proto_mask[group_index][j] == 0:
-                                mask_indices.append(0)
-                            else:
-                                mask_indices.append(1)
-                proto_action_indices[group_index][i] = indices
-                proto_mask_indices[group_index][i] = mask_indices
-
-
-                temp = len(indices)
-                if len(indices) > max_len:
-                    max_len = len(indices)
-                # if len(actions) > 300:
-                #     break
-        end1 = time.time()
-        for group_actions, mask_actions in zip(proto_action_indices, proto_mask_indices):
-            for i in range(len(group_actions)):
-                group_actions[i] = common_util.pad_sequence_to_length(group_actions[i], max_len)
-                mask_actions[i] = common_util.pad_sequence_to_length(mask_actions[i], max_len)
-        end2 = time.time()
-        # print("Time for constructing action indices", (end1 - start1)*1000)
-        # print("Time for padding", (end2-end1)*1000)
-        if max_len != 0:
-            # (group_size, num_actions, max_num_proto_occurrences)
-            end3 = time.time()
-            proto_action_tensor = Variable(state.score[0].data.new(proto_action_indices).long())
-            proto_mask_tensor = Variable(state.score[0].data.new(proto_mask_indices).long())
-            end4 = time.time()
-            # (group_size, num_actions, max_num_proto_occurrences, 1)
-
-            proto_attention = batched_index_select(proto_attention_weights.unsqueeze(-1), proto_action_tensor)
-
-            end5 = time.time()
-            # print("Time for initialization", (end4 - end3) * 1000)
-            # print("Time for batched index select", (end5 - end4) * 1000)
-            proto_attention = proto_attention.squeeze(-1)
-            # In the case where an action doesn't appear in the prototype, it'll just be a list
-            # with 0's up to max_len and this will be filled with a valid attention value. Thus
-            # We need to mask this.
-            proto_attention = proto_attention * proto_mask_tensor.float()
-            summed_proto_attention = torch.sum(proto_attention, dim=-1)
-
-            # cosine similarity over the utternaces
-            cosine_sim = CosineSimilarity()
-            utt_similarity = cosine_sim(proto_utt_final_encoder_outputs, utt_final_encoder_outputs)
-
-            x = self.utt_sim_linear(utt_similarity.unsqueeze(-1))#.squeeze(-1)
-            summed_proto_attention = x * summed_proto_attention
+        summed_proto_attention = self.get_summed_proto_action_attention(
+                                          action_attention_indices,
+                                          action_attention_mask,
+                                          action_indices,
+                                          proto_attention_weights,
+                                          utt_final_encoder_outputs,
+                                          proto_utt_final_encoder_outputs)
 
 
         num_actions = [len(action_list) for action_list in actions_to_embed]
@@ -245,10 +185,11 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             embedded_action_logits = action_embeddings.bmm(predicted_action_embedding.unsqueeze(-1)).squeeze(-1)
 
             # mod rajas
-            if max_len != 0:
+            # if max_len != 0:
                 # print("embedded", embedded_action_logits.size())
                 # print(summed_proto_attention.size())
-                embedded_action_logits = embedded_action_logits + summed_proto_attention
+            embedded_action_logits.scatter_add_(dim=1, index=action_indices, src=summed_proto_attention)
+            # embedded_action_logits = embedded_action_logits + summed_proto_attention
 
             if actions_to_link:
                 # entity_action_logits: (group_size, num_entity_actions)
@@ -320,6 +261,81 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                             self._identifier_literal_action_embedding,
                                             max_actions)
 
+    def get_summed_proto_action_attention(self,
+                                          action_attention_indices,
+                                          action_attention_mask,
+                                          action_indices,
+                                          proto_attention_weights,
+                                          utt_final_encoder_outputs,
+                                          proto_utt_final_encoder_outputs):
+
+        # (group_size, num_actions, max_num_proto_occurrences, 1)
+        proto_attention = batched_index_select(proto_attention_weights.unsqueeze(-1), action_attention_indices)
+
+        end5 = time.time()
+        # print("Time for initialization", (end4 - end3) * 1000)
+        # print("Time for batched index select", (end5 - end4) * 1000)
+        proto_attention = proto_attention.squeeze(-1)
+        # In the case where an action doesn't appear in the prototype, it'll just be a list
+        # with 0's up to max_len and this will be filled with a valid attention value. Thus
+        # We need to mask this.
+        proto_attention = proto_attention * action_attention_mask.float()
+        # (group_size, max_num_actions_in_proto)
+        summed_proto_attention = torch.sum(proto_attention, dim=-1)
+
+        # cosine similarity over the utternaces
+        cosine_sim = CosineSimilarity()
+        utt_similarity = cosine_sim(proto_utt_final_encoder_outputs, utt_final_encoder_outputs)
+
+        x = self.utt_sim_linear(utt_similarity.unsqueeze(-1))  # .squeeze(-1)
+        summed_proto_attention = x * summed_proto_attention
+        return summed_proto_attention
+
+    def get_action_prototype_attention_indices(self, state, actions_to_embed):
+        # upper bounded by length of prototype
+        max_num_actions_in_proto = len(state.proto_actions[0])
+        # upper bounded by length of prototype
+        max_num_single_action_repeat_in_proto = len(state.proto_actions[0])
+        group_size = len(actions_to_embed)
+        action_attention_indices = np.zeros(
+            (group_size, max_num_actions_in_proto, max_num_single_action_repeat_in_proto), dtype=int)
+        action_attention_mask = np.zeros((group_size, max_num_actions_in_proto, max_num_single_action_repeat_in_proto),
+                                         dtype=int)
+        action_indices = np.zeros((group_size, max_num_actions_in_proto), dtype=int)
+
+        start1 = time.time()
+        for group_index, actions in enumerate(actions_to_embed):
+            action_loc = 0
+            for action_index, a in enumerate(actions):
+                action_in_proto = False
+                if a == 0:
+                    break
+                proto_loc = 0
+                for j, a2 in enumerate(state.proto_actions[group_index]):
+                    if a2 == 0: # better to check if mask is 0
+                        break
+                    if a == a2:
+                        action_attention_indices[group_index][action_loc][proto_loc] = j
+                        action_attention_mask[group_index][action_loc][proto_loc] = 1
+                        # indices[loc](j)
+                        # if state.proto_mask[group_index][j] == 0:
+                        #     mask_indices[loc] = 0
+                        # else:
+                        #     mask_indices[loc] = 1
+                        proto_loc += 1
+                        action_in_proto = True
+
+                if action_in_proto:
+                    # print(group_index, action_loc, action_indices.shape)
+                    action_indices[group_index][action_loc] = action_index
+                    action_loc += 1
+                    # (group_size, num_actions, max_num_proto_occurrences)
+        end3 = time.time()
+        action_attention_indices = Variable(state.score[0].data.new(action_attention_indices).long())
+        action_attention_mask = Variable(state.score[0].data.new(action_attention_mask).long())
+        action_indices = Variable(state.score[0].data.new(action_indices).long())
+        end4 = time.time()
+        return action_attention_indices, action_attention_mask, action_indices
 
     def attend_on_question(self,
                            query: torch.Tensor,
@@ -341,6 +357,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # (group_size, encoder_output_dim)
         attended_question = util.weighted_sum(encoder_outputs, question_attention_weights)
         return attended_question, question_attention_weights
+
 
     @staticmethod
     # @timeit

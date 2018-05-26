@@ -6,6 +6,8 @@ import re
 
 import os
 
+import time
+
 from allennlp.training.metrics import Average
 from overrides import overrides
 
@@ -48,6 +50,7 @@ class JavaSemanticParser(Model):
                  vocab: Vocabulary,
                  utterance_embedder: TextFieldEmbedder,
                  encoder: Seq2SeqEncoder,
+                 proto_encoder: Seq2SeqEncoder,
                  mixture_feedforward: FeedForward,
                  # nonterminal_embedder: TextFieldEmbedder,
                  max_decoding_steps: int,
@@ -67,6 +70,7 @@ class JavaSemanticParser(Model):
         self._decoder_beam_search = decoder_beam_search
 
         self._encoder = encoder
+        self._proto_encoder = proto_encoder
 
         # self._embedding_dim = self._nonterminal_embedder.get_output_dim()
         # self._decoder_output_dim = self._encoder.get_output_dim()
@@ -101,6 +105,7 @@ class JavaSemanticParser(Model):
         torch.nn.init.constant(self._first_attended_question, 0.0)
 
         self._linking_params = torch.nn.Linear(num_linking_features, 1)
+        # self._proto_params = torch.nn.Linear(2 * self._encoder.get_output_dim(), self._encoder.get_output_dim())
 
         self._decoder_step = JavaDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
                                              mixture_feedforward=mixture_feedforward,
@@ -125,6 +130,7 @@ class JavaSemanticParser(Model):
     # @timeit
     def forward(self,  # type: ignore
                 utterance: Dict[str, torch.LongTensor],
+                prototype_utterance: Dict[str, torch.LongTensor],
                 # variable_names: Dict[str, torch.LongTensor],
                 # variable_types: Dict[str, torch.LongTensor],
                 # method_names: Dict[str, torch.LongTensor],
@@ -133,6 +139,7 @@ class JavaSemanticParser(Model):
                 java_class: Dict[str, torch.LongTensor],
                 entities: List[Set[str]],
                 rules: List[torch.Tensor] = None,
+                prototype_rules: List[torch.Tensor] = None,
                 metadata: List[Dict[str, str]] = None
                 ) -> Dict[str, torch.Tensor]:
 
@@ -144,13 +151,55 @@ class JavaSemanticParser(Model):
         batch_size, _, _ = embedded_utterance.size()
         utterance_mask = get_text_field_mask(utterance)
 
+        proto_embedded_utterance = self._utterance_embedder(prototype_utterance)
+        proto_utterance_mask = get_text_field_mask(prototype_utterance)
+
+        _, actionidx2vocabidx = self._embed_actions(actions)
+        actionidx2vocabidx[(0, -1)] = 0
+
+        start1 = time.time()
+        proto_actions = []
+        proto_mask_lst = []
+        for r in prototype_rules:
+            lst = r.long().data.cpu().numpy().tolist()
+            # the -1 padding values need to be 0
+            proto_mask_lst.append([x+1 for x in lst])
+
+            # lst = [v if v!=-1 else 0 for v in lst]
+            indexes = [actionidx2vocabidx[(0, v)] if (0, v) in actionidx2vocabidx else 0 for v in lst]
+            proto_actions.append(indexes)
+        proto_tensor = Variable(embedded_utterance.data.new(proto_actions).long())
+        proto_mask_tens = Variable(embedded_utterance.data.new(proto_mask_lst).long())
+        proto_embeddings = self._action_embedder(proto_tensor)
+        proto_mask = get_text_field_mask({'text': proto_mask_tens})
+        end1 = time.time()
+        # print("Time for proto rule embeddings", (end1 - start1) * 1000)
+        # todo(rajas) change the encoder
+        encoder_proto_out = self._dropout(self._proto_encoder(proto_embeddings, proto_mask))
+
+        # # todo(rajas) bidirection will be set to false
+        # final_encoder_proto_out = util.get_final_encoder_states(encoder_proto_out,
+        #                                                      proto_mask,
+        #                                                      True)
+        # final_encoder_proto_out = final_encoder_proto_out.unsqueeze(1)
+
         # (batch_size, question_length, encoder_output_dim)
         encoder_outputs = self._dropout(self._encoder(embedded_utterance, utterance_mask))
+        proto_utt_encoder_outputs = self._dropout(self._encoder(proto_embedded_utterance, proto_utterance_mask))
+
+        # final_encoder_proto_out = final_encoder_proto_out.expand(batch_size, encoder_outputs.size(1), final_encoder_proto_out.size(2))
+        #
+        # encoder_outputs = torch.cat([encoder_outputs, final_encoder_proto_out], dim=2)
+        # encoder_outputs = self._proto_params(encoder_outputs)
+
 
         # This will be our initial hidden state and memory cell for the decoder LSTM.
         # todo(rajas) change back to encoder is bidirectional from True
-        final_encoder_output = util.get_final_encoder_states(encoder_outputs,
+        final_utt_encoder_output = util.get_final_encoder_states(encoder_outputs,
                                                              utterance_mask,
+                                                             True)
+        final_proto_utt_encoder_output = util.get_final_encoder_states(proto_utt_encoder_outputs,
+                                                             proto_utterance_mask,
                                                              True)
         memory_cell = Variable(encoder_outputs.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
 
@@ -158,7 +207,6 @@ class JavaSemanticParser(Model):
         debug_print("utterance weight", self._utterance_embedder._token_embedders['tokens'].weight.size())
         # exit()
         initial_score = Variable(embedded_utterance.data.new(batch_size).fill_(0))
-        _, actionidx2vocabidx = self._embed_actions(actions)
 
         # (batch_size, num_entities, num_question_tokens, num_features)
         linking_features = java_class['linking']
@@ -183,15 +231,28 @@ class JavaSemanticParser(Model):
         initial_score_list = [initial_score[i] for i in range(batch_size)]
         encoder_output_list = [encoder_outputs[i] for i in range(batch_size)]
         question_mask_list = [utterance_mask[i] for i in range(batch_size)]
+
+        proto_rules_encoder_output_list = [encoder_proto_out[i] for i in range(batch_size)]
+        proto_rules_encoder_mask_list = [proto_mask[i] for i in range(batch_size)]
+
+        utt_final_encoder_output_list = [final_utt_encoder_output[i] for i in range(batch_size)]
+        proto_utt_final_encoder_output_list = [final_proto_utt_encoder_output[i] for i in range(batch_size)]
+        # proto_utt_encoder_mask_list = [proto_mask[i] for i in range(batch_size)]
+
         initial_rnn_state = []
         for i in range(batch_size):
-            initial_rnn_state.append(RnnState(final_encoder_output[i],
+            initial_rnn_state.append(RnnState(final_utt_encoder_output[i],
                                               memory_cell[i],
                                               self._first_action_embedding,
                                               self._first_attended_question,
                                               encoder_output_list,
                                               question_mask_list,
-                                              parent_states=[self._first_action_embedding]))
+                                              parent_states=[self._first_action_embedding],
+                                              proto_rules_encoder_outputs=proto_rules_encoder_output_list,
+                                              proto_rules_encoder_output_mask=proto_rules_encoder_mask_list,
+                                              utt_final_encoder_outputs=utt_final_encoder_output_list,
+                                              proto_utt_final_encoder_outputs=proto_utt_final_encoder_output_list))
+
         initial_grammar_state = [self._create_grammar_state(actions[i])
                                  for i in range(batch_size)]
         initial_state = JavaDecoderState(batch_indices=list(range(batch_size)),
@@ -204,6 +265,8 @@ class JavaSemanticParser(Model):
                                          possible_actions=actions,
                                          flattened_linking_scores=flattened_linking_scores,
                                          actions_to_entities=actions_to_entities,
+                                         proto_actions=proto_actions,
+                                         proto_mask=proto_mask_lst,
                                          # entity_types=entity_type_dict,
                                          debug_info=None)
 
@@ -224,7 +287,8 @@ class JavaSemanticParser(Model):
                                              rules)['loss']
 
             # Now remove unk rules from the grammar state for better code gen.
-            initial_state.grammar_state = [self._create_grammar_state_no_unks(a) for a in actions]
+            # initial_state.grammar_state = [self._create_grammar_state_no_unks(a) for a in actions]
+            initial_state.grammar_state = [self._create_grammar_state(a) for a in actions]
             num_steps = self._max_decoding_steps
             initial_state.debug_info = [[] for _ in range(batch_size)]
             best_final_states = self._decoder_beam_search.search(num_steps,
@@ -383,21 +447,21 @@ class JavaSemanticParser(Model):
             rules.append(actions[a][0])
         return rules
 
-    # def _get_rules_from_action_history(self, target_actions :List[int], predicted_actions: List[int], actions: List[ProductionRuleArray]):
-    #     predicted_rules = []
-    #     target_rules = []
-    #     for a in target_actions:
-    #         target_rules.append(actions[a][0])
-    #     for a in predicted_actions:
-    #         predicted_rules.append(actions[a][0])
-    #     return target_rules, predicted_rules
-
-    def _log_rules(self, target_rules, predicted_rules, batch):
-        f = open('debug/pred_target_strings.csv', 'a')
-        f.write("batch, " + str(batch) + '\n')
-        for i in range(min(len(target_rules), len(predicted_rules))):  #todo(rajas) handle bounds
-            f.write(target_rules[i] + ", " + predicted_rules[i] + '\n')
-        f.close()
+    def indent(self, code):
+        newlists = [[]]
+        for tok in code:
+            newlists[-1].append(tok)
+            if tok == '{' or tok == ';' or tok == '}':
+                newlists.append([])
+        indent = 0
+        pretty = ""
+        for x in newlists:
+            if '}' in x:
+                indent -= 1
+            pretty += ('\t' * indent) + ' '.join(x) + "\n"
+            if '{' in x:
+                indent += 1
+        return pretty.strip('\n')
 
     def _log_predictions(self, metadata, pred_code, batch):
         # codef.write("batch, " + str(batch) + '\n')
@@ -413,15 +477,20 @@ class JavaSemanticParser(Model):
             codef = open('debug/pred_target_code.txt', 'a')
 
         log = '==============' * 4 + '\n'
-        log += 'NL:' + ' '.join(metadata['utterance']) + '\n'
-        log += 'Variables:\n'
-        log += self.combine_name_types(metadata['variableNames'], metadata['variableTypes'])
-        log += 'Methods:\n'
-        log += self.combine_name_types(metadata['methodNames'], metadata['methodTypes'])
+        # log += 'Variables:\n'
+        # log += self.combine_name_types(metadata['variableNames'], metadata['variableTypes'])
+        # log += 'Methods:\n'
+        # log += self.combine_name_types(metadata['methodNames'], metadata['methodTypes'])
+        log += 'Prototype========\n'
+        log += 'NL:' + ' '.join(metadata['prototype_utterance']) + '\n'
+        log += 'methodName:' + (metadata['prototype_methodName']) + '\n'
+        log += self.indent(metadata['prototype_code']) + '\n'
         log += 'Target========\n'
-        log += ' '.join(metadata['code']) + '\n'
+        log += 'NL:' + ' '.join(metadata['utterance']) + '\n'
+        log += 'methodName:' + (metadata['methodName']) + '\n'
+        log += self.indent(metadata['code']) + '\n'
         log += 'Prediction====\n'
-        log += ' '.join(pred_code) + '\n'
+        log += self.indent(pred_code) + '\n'
         print(log)
 
         codef.write(log)
@@ -590,6 +659,7 @@ class JavaSemanticParser(Model):
         utterance_embedder_params = params.pop("utterance_embedder")
         utterance_embedder = TextFieldEmbedder.from_params(vocab, utterance_embedder_params)
         encoder = Seq2SeqEncoder.from_params(params.pop("encoder"))
+        proto_encoder = Seq2SeqEncoder.from_params(params.pop("proto_encoder"))
         max_decoding_steps = params.pop("max_decoding_steps")
         action_embedding_dim = params.pop_int("action_embedding_dim")
         dropout = params.pop_float('dropout', 0.0)
@@ -617,6 +687,7 @@ class JavaSemanticParser(Model):
         return cls(vocab,
                    utterance_embedder=utterance_embedder,
                    encoder=encoder,
+                   proto_encoder=proto_encoder,
                    attention_function=attention_function,
                    mixture_feedforward=mixture_feedforward,
                    # nonterminal_embedder=nonterminal_embedder,

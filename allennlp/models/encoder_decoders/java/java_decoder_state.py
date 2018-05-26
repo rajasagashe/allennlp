@@ -24,6 +24,8 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                  possible_actions: List[List[ProductionRuleArray]],
                  flattened_linking_scores: torch.FloatTensor,
                  actions_to_entities: Dict[Tuple[int, int], int],
+                 proto_actions:List[List[int]],
+                 proto_mask:List[List[int]],
                  debug_info: List = None
                  # prev_rules: List[torch.Tensor],
                  # nonterminal2parent_rules: List[Dict[str, torch.LongTensor]],
@@ -38,6 +40,8 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         self.flattened_linking_scores = flattened_linking_scores
         self.actions_to_entities = actions_to_entities
         self.debug_info = debug_info
+        self.proto_actions = proto_actions
+        self.proto_mask = proto_mask
         # self.nonterminal_action_indices = nonterminal_action_indices
         # self.prev_rules = prev_rules
         # self.nonterminal2parent_rules = nonterminal2parent_rules
@@ -61,10 +65,16 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         scores = [score for state in states for score in state.score]
         rnn_state = [rnn_state for state in states for rnn_state in state.rnn_state]
         grammar_states = [grammar_state for state in states for grammar_state in state.grammar_state]
+
+        proto_actions = [proto_actions for state in states for proto_actions in state.proto_actions]
+        proto_actions_mask = [proto_mask for state in states for proto_mask in state.proto_mask]
+
         if states[0].debug_info is not None:
             debug_info = [debug_info for state in states for debug_info in state.debug_info]
         else:
             debug_info = None
+
+
         # nonterminals = [nonterminal for state in states for nonterminal in state.nonterminals]
         # prev_rules = [prev_rule for state in states for prev_rule in state.prev_rules]
         # nonterminal_action_indices = [nonterminal_action_index for state in states for nonterminal_action_index in state.nonterminal_action_indices]
@@ -83,6 +93,8 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                                 possible_actions=states[0].possible_actions,
                                 flattened_linking_scores=states[0].flattened_linking_scores,
                                 actions_to_entities=states[0].actions_to_entities,
+                                proto_actions=proto_actions,
+                                proto_mask=proto_actions_mask,
                                 debug_info=debug_info
                                 # nonterminals=nonterminals,
                                 # nonterminal_action_indices=nonterminal_action_indices,

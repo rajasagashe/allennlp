@@ -28,6 +28,7 @@ IDENTIFIER_TYPES = ['Primary', 'ClassOrInterfaceType', 'Nt_33']
 LITERALS_TO_TRIM = [IdentifierNT+IDENTIFIER_TYPES[0], IdentifierNT+IDENTIFIER_TYPES[1], IdentifierNT+IDENTIFIER_TYPES[2], IdentifierOther, "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
 UNK = '<UNK>'
 DUMMY = '<DUMMY>'
+PLAIN_IDENTIFIER_RULE = "<SOME_NAME>-->" + "<SOME_NAME>"
 
 @DatasetReader.register("java")
 class JavaDatasetReader(DatasetReader):
@@ -50,43 +51,40 @@ class JavaDatasetReader(DatasetReader):
         self._tokenizer = tokenizer or WordTokenizer()
         self._linking_feature_extractors = linking_feature_extractors
 
-    class ASTNode:
-        def __init__(self, children, rule, desc):
-            self.children = children
-            self.rule = rule
-            self.desc = desc
-    def is_nonterminal(self, nt):
-        return nt[0].isupper()
-    def _is_terminal_rule(self, rule):
-        lhs, rhs = rule.split('-->')
-        return (
-               "IdentifierNT" in lhs) \
-               or re.match(r"^Nt_.*_literal-->.*", rule) \
-               or rule == "<unk>"
-
-    def gen_ast(self, rules, i):
-        curr = self.ASTNode([], rules[i], "")
-        lhs, rhs = rules[i].split('-->')
-        rhs_tokens = rhs.split('___')
-        if self._is_terminal_rule(rules[i]):
-            curr.desc += rhs
-        else:
-            for nt in rhs_tokens:
-                if self.is_nonterminal(nt):
-                    child, i = self.gen_ast(rules, i+1)
-                    curr.children.append(child)
-                    curr.desc += child.desc
-                else:
-                    curr.desc += nt
-        return curr, i
-
-    def printMethodCaller(self, curr):
-        lhs, rhs = curr.rule.split('-->')
-        if rhs == 'Expression___.___Nt_33':
-            print(curr.children[0].desc, curr.children[1].desc)
-        for c in curr.children:
-            self.printMethodCaller(c)
-
+    # class ASTNode:
+    #     def __init__(self, children, rule, desc):
+    #         self.children = children
+    #         self.rule = rule
+    #         self.desc = desc
+    # def is_nonterminal(self, nt):
+    #     return nt[0].isupper()
+    # def _is_terminal_rule(self, rule):
+    #     lhs, rhs = rule.split('-->')
+    #     return (
+    #            "IdentifierNT" in lhs) \
+    #            or re.match(r"^Nt_.*_literal-->.*", rule) \
+    #            or rule == "<unk>"
+    # def gen_ast(self, rules, i):
+    #     curr = self.ASTNode([], rules[i], "")
+    #     lhs, rhs = rules[i].split('-->')
+    #     rhs_tokens = rhs.split('___')
+    #     if self._is_terminal_rule(rules[i]):
+    #         curr.desc += rhs
+    #     else:
+    #         for nt in rhs_tokens:
+    #             if self.is_nonterminal(nt):
+    #                 child, i = self.gen_ast(rules, i+1)
+    #                 curr.children.append(child)
+    #                 curr.desc += child.desc
+    #             else:
+    #                 curr.desc += nt
+    #     return curr, i
+    # def printMethodCaller(self, curr):
+    #     lhs, rhs = curr.rule.split('-->')
+    #     if rhs == 'Expression___.___Nt_33':
+    #         print(curr.children[0].desc, curr.children[1].desc)
+    #     for c in curr.children:
+    #         self.printMethodCaller(c)
 
     @overrides
     def _read(self, file_path: str):
@@ -95,22 +93,41 @@ class JavaDatasetReader(DatasetReader):
 
         logger.info("Reading file at %s", file_path)
         with open(file_path) as dataset_file:
-            dataset = json.load(dataset_file)
-        if self._num_dataset_instances != -1:
-            dataset = dataset[0:self._num_dataset_instances]
+            p2methods = json.load(dataset_file)
 
-        # for i in range(10):
-        #     temp, _ = self.gen_ast(dataset[i]['rules'], 0)
-        #     self.printMethodCaller(temp)
-        # exit()
+        dataset = []
+        for _, methods in p2methods.items():
+            dataset += methods
+            if self._num_dataset_instances != -1:
+                if len(dataset) > self._num_dataset_instances:
+                    break
+        # if self._num_dataset_instances != -1:
+        #     dataset = dataset[:self._num_dataset_instances]
 
-        modified_rules = self.split_identifier_rule_into_multiple(dataset)
+        modified_rules = self.split_identifier_rule_into_multiple(
+            [d['rules'] for d in dataset]
+        )
+
+        og_prototype_rules = [d['prototype_rules'] for d in dataset]
+        prototype_rules = self.split_identifier_rule_into_multiple(
+            [d['prototype_rules'] for d in dataset]
+        )
+        global_production_rule_fields, global_rule2index = self.get_global_rule_fields(modified_rules)
+
+        for rules in prototype_rules:
+            for i,rule in enumerate(rules):
+                # lhs, rhs = rule.split('-->')
+                # No class field/func identifier rules since these cannot be embedded
+                if rule not in global_rule2index:
+                    rules[i] = PLAIN_IDENTIFIER_RULE
+                # if IdentifierNT in lhs and 'srini' in rhs:
+                #     rules[i] = PLAIN_IDENTIFIER_RULE
+
         # types = self.get_types_used_frequently_even_if_not_in_class(modified_rules, dataset)
 
         # self.experiment_type(modified_rules, dataset)
         # self.experiment_nt33(modified_rules, dataset)
 
-        global_production_rule_fields, global_rule2index = self.get_global_rule_fields(modified_rules)
 
         logger.info("Reading the dataset")
         for i, record in enumerate(dataset):
@@ -123,7 +140,13 @@ class JavaDatasetReader(DatasetReader):
                                              global_rule2index,
                                              record['code'],
                                              # Pass the modified identifier rules.
-                                             modified_rules[i])
+                                             modified_rules[i],
+                                             proto_rules=prototype_rules[i],
+                                             proto_tokens=record['prototype_nl'],
+                                             proto_code=record['prototype_code'],
+                                             proto_og_rules=og_prototype_rules[i],
+                                             protoMethodName=record['prototype_methodName'],
+                                             methodName=record['methodName'])
             yield instance
 
     def get_types_used_frequently_even_if_not_in_class(self, rules, dataset):
@@ -173,16 +196,16 @@ class JavaDatasetReader(DatasetReader):
         exit()
 
 
-    def split_identifier_rule_into_multiple(self, dataset):
+    def split_identifier_rule_into_multiple(self, rules_lst):
         """ The identifier rule is split based on parent state prefix to cut down the
         search space"""
 
         IDENTIFIER_TYPES = ['Primary', 'ClassOrInterfaceType', 'Nt_33']
         new_rules = []
-        for d in dataset:
+        for rules in rules_lst:
             stack = []
             new_rules.append([])
-            for rule in d['rules']:
+            for rule in rules:
                 lhs, rhs = rule.split('-->')
                 if IdentifierNT in rhs:
                     stack.append(lhs)
@@ -199,15 +222,6 @@ class JavaDatasetReader(DatasetReader):
                 else:
                     new_rules[-1].append(rule)
 
-            # last = new_rules[-1]
-            # for rule in last:
-            #     if rule == 'IdentifierNTPrimary-->String':
-            #         print(' '.join(d['nl']))
-            #         print(' '.join(d['code']))
-            #         for rule2 in last:
-            #             print(rule2)
-            #         exit()
-
         return new_rules
 
     def get_global_rule_fields(self, rules):
@@ -216,9 +230,14 @@ class JavaDatasetReader(DatasetReader):
 
         # Converts all the rules into ProductionRuleFields and returns a dictionary
         # from the rule to its index in the ListField of ProductionRuleFields.
-        production_rule_fields = []
 
         rule2index = {}
+        # todo(rajas): look into why adding this first rule breaks code
+        # Temporarily adding a padding action in first spot so that
+        # 0 can be used as a padding action
+        # production_rule_fields = [ProductionRuleField(rule='', is_global_rule=False)]
+        # index = 1
+        production_rule_fields = []
         index = 0
         for lhs, all_rhs in lhs2all_rhs.items():
             for rhs in all_rhs:
@@ -240,6 +259,12 @@ class JavaDatasetReader(DatasetReader):
 
                 rule2index[rule] = index
                 index += 1
+
+        # Add the trivial identifier rule which will be used for all prototype
+        # identifiers and the prev action embedding for a rule after identifier
+        field = ProductionRuleField(PLAIN_IDENTIFIER_RULE, is_global_rule=True)
+        production_rule_fields.append(field)
+        rule2index[PLAIN_IDENTIFIER_RULE] = index
         return production_rule_fields, rule2index
 
     @overrides
@@ -253,6 +278,12 @@ class JavaDatasetReader(DatasetReader):
                          globalrule2index: Dict[str, int],
                          code: str = None,
                          rules: List[str] = None,
+                         proto_rules: List[str] = None,
+                         proto_tokens: List[str] = None,
+                         proto_code: List[str] = None,
+                         proto_og_rules:List[str] = None,
+                         protoMethodName: str = None,
+                         methodName: str = None
                          ) -> Instance:
         fields = {}
 
@@ -264,22 +295,36 @@ class JavaDatasetReader(DatasetReader):
 
         # todo(rajas) add camel casing for utterance tokens as well
         # utterance = [t for word in utterance for t in self.split_camel_case(word)]
-        utterance_tokens = [Token(t.lower()) for t in utterance]
+
+        # toks = ['<CURR>'] + utterance[:10]
+        # toks += ['<PROTOTYPE>'] + proto_tokens[:10]
+        toks = self.split_camel_case(methodName) + ['<SEP>'] + utterance[:25]
+        utterance_tokens = [Token(t.lower()) for t in toks]
         utterance_field = TextField(utterance_tokens, self._utterance_indexers)
 
-        metadata_dict = {'utterance':  utterance,
+
+        proto_toks = self.split_camel_case(protoMethodName) +['<SEP>'] + proto_tokens[:25]
+        proto_utterance_tokens = [Token(t.lower()) for t in proto_toks]
+        proto_utterance_field = TextField(proto_utterance_tokens, self._utterance_indexers)
+
+        metadata_dict = {'utterance':  toks,
+                         'prototype_utterance': proto_toks,
                          'variableNames':  variable_names,
                          'variableTypes':  variable_types,
                          'methodNames':  method_names,
-                         'methodTypes':  method_types}
+                         'methodTypes':  method_types,
+                         'prototype_methodName': protoMethodName,
+                         'methodName': methodName}
         if code is not None:
             metadata_dict['code'] = code
+            metadata_dict['prototype_code'] = proto_code
         fields['metadata'] = MetadataField(metadata_dict)
 
         knowledge_graph, entity2isType = self.get_java_class_knowledge_graph(variable_names=variable_names,
                                                               variable_types=variable_types,
                                                               method_names=method_names,
-                                                              method_types=method_types)
+                                                              method_types=method_types,
+                                                              proto_rules=proto_og_rules)
 
         # We need to iterate over knowledge_graph's entities since these are sorted and each entity in
         # entity_tokens needs to correspond to knowledge_graph's entities.
@@ -308,10 +353,15 @@ class JavaDatasetReader(DatasetReader):
             target_rule_field = self.get_target_rule_field(rules, globalrule2index, environmentrule2index)
             fields['rules'] = target_rule_field
 
+        if proto_rules is not None:
+            # todo(rajas) just make this a production rule field
+            proto_rule_field = self.get_target_rule_field(proto_rules, globalrule2index, environmentrule2index)
+            fields['prototype_rules'] = proto_rule_field
 
         entity_field = MetadataField(knowledge_graph.entities)
 
         fields.update({"utterance": utterance_field,
+                       "prototype_utterance": proto_utterance_field,
                        # "variable_names": variable_name_fields,
                        # "variable_types": variable_types_field,
                        # "method_names": method_name_fields,
@@ -367,9 +417,10 @@ class JavaDatasetReader(DatasetReader):
                                        variable_names,
                                        variable_types,
                                        method_names,
-                                       method_types):
-        # Note that sriniclass_ prefix means that the name is copied from the
-        # java class.
+                                       method_types,
+                                       proto_rules=None):
+        # # Note that sriniclass_ prefix means that the name is copied from the
+        # # java class.
 
         # todo(rajas): handle types like List<String>. ideally this should
         # map to 3 types
@@ -412,8 +463,19 @@ class JavaDatasetReader(DatasetReader):
                 neighbors[entity].append(t)
                 neighbors[t].append(entity)
 
+        # todo(rajas) this can get sped up by iterating over rules instead
+        entity2in_prototype = {}
+        for e in entities:
+            for rule in proto_rules:
+                if e in rule:
+                    entity2in_prototype[e] = True
+
+
         # neighbors = {entity: [] for entity in entity_text}
-        knowledge_graph = KnowledgeGraph(entities=entities, entity_text=entity_text, neighbors=neighbors)
+        knowledge_graph = KnowledgeGraph(entities=entities,
+                                         entity_text=entity_text,
+                                         neighbors=neighbors,
+                                         entity2in_prototype=entity2in_prototype)
         return knowledge_graph, entity2isType
 
     def split_type(self, type):

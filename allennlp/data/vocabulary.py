@@ -195,6 +195,10 @@ class Vocabulary:
                 max_vocab = max_vocab_size[namespace]
                 if max_vocab:
                     token_counts = token_counts[:max_vocab]
+
+                # todo(rajas): remove this, and add a dummy rule instead
+                self.add_token_to_namespace("DUMMY", namespace)
+
                 for token, count in token_counts:
                     if pretrained_list is not None:
                         if only_include_pretrained_words:
