@@ -380,6 +380,18 @@ class JavaSemanticParser(Model):
                 considered_actions, probabilities = zip(*actions)
                 action_info['considered_actions'] = considered_actions
                 action_info['action_probabilities'] = probabilities
+
+                considered_prototype_actions = action_debug_info['considered_prototype_actions']
+                prototype_action_score = action_debug_info['prototype_action_score']
+                actions = []
+                for action, probability in zip(considered_prototype_actions, prototype_action_score):
+                    if action != -1:
+                        actions.append((action_mapping[(batch_index, action)], probability))
+                actions.sort()
+                considered_prototype_actions, prototype_action_score = zip(*actions)
+                action_info['considered_prototype_actions'] = considered_prototype_actions
+                action_info['prototype_action_score'] = prototype_action_score
+
                 action_info['question_attention'] = action_debug_info['question_attention']
                 action_info['prototype_attention'] = action_debug_info['prototype_attention']
                 instance_action_info.append(action_info)

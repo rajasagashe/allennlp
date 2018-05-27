@@ -265,7 +265,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                             allowed_actions,
                                             self._identifier_literal_action_embedding,
                                             prototype_attention_weights=proto_attention_weights,
-                                            max_actions=max_actions)
+                                            max_actions=max_actions,
+                                            summed_proto_attention=summed_proto_attention,
+                                            action_indices=action_indices,
+                                            actions_to_embed=actions_to_embed)
 
     def get_summed_proto_action_attention(self,
                                           hidden_state,
@@ -678,7 +681,11 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                             allowed_actions: List[Set[int]],
                             identifier_literal_action_embedding: torch.Tensor,
                             prototype_attention_weights: torch.Tensor,
-                            max_actions: int = None) -> List[JavaDecoderState]:
+                            max_actions: int = None,
+                            summed_proto_attention = None,
+                            action_indices = None,
+                            actions_to_embed = None
+                            ) -> List[JavaDecoderState]:
         # Each group index here might get accessed multiple times, and doing the slicing operation
         # each time is more expensive than doing it once upfront.  These three lines give about a
         # 10% speedup in training time.  I also tried this with sorted_log_probs and
@@ -698,6 +705,19 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             sorted_log_probs_cpu = sorted_log_probs.data.cpu().numpy()
         if state.debug_info is not None:
             probs_cpu = log_probs.exp().data.cpu().numpy().tolist()
+            prototype_action_score = summed_proto_attention.data.cpu().numpy().tolist()
+            considered_proto_actions = action_indices.data.cpu().numpy().tolist()
+            new_actions = []
+            for group_index, proto_action_index in enumerate(considered_proto_actions):
+                new_actions.append([])
+                for i in range(len(proto_action_index)):
+                    # action_id = actions_to_embed[group_index][proto_action_index[i]]
+                    action_id = considered_actions[group_index][proto_action_index[i]]
+                    if action_id not in new_actions[-1]:
+                        new_actions[-1].append(action_id)
+                prototype_action_score[group_index] = prototype_action_score[group_index][:len(new_actions[-1])]
+            considered_proto_actions = new_actions
+
         sorted_actions = sorted_actions.data.cpu().numpy().tolist()
         best_next_states: Dict[int, List[Tuple[int, int, int]]] = defaultdict(list)
         for group_index, (batch_index, group_actions) in enumerate(zip(state.batch_indices, sorted_actions)):
@@ -760,9 +780,11 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 if state.debug_info is not None:
                     debug_info = {
                             'considered_actions': considered_actions[group_index],
+                            'considered_prototype_actions': considered_proto_actions[group_index],
                             'question_attention': attention_weights[group_index],
                             'prototype_attention': prototype_attention_weights[group_index],
                             'probabilities': probs_cpu[group_index],
+                            'prototype_action_score': prototype_action_score[group_index],
                             }
                     new_debug_info = [state.debug_info[group_index] + [debug_info]]
                 else:

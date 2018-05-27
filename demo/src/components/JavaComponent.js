@@ -305,16 +305,27 @@ class ActionInfo extends React.Component {
     const action_probs = action['action_probabilities'].map(x => [x]);
     const prototype_attention = action['prototype_attention'].map(x => [x]);
 
+    const considered_prototype_actions = action['considered_prototype_actions'];
+    const prototype_action_score = action['prototype_action_score'].map(x => [x]);
+
     console.log("ActionInfo");
-    console.log(question_tokens);
-    console.log(prototype_rules);
-    // console.log(action_string);
+      console.log(action_probs);
+      console.log(prototype_action_score);
+
+      console.log(considered_actions);
+      console.log(considered_prototype_actions);
+      // console.log(action_string);
     // console.log(question_attention);
     // console.log(considered_actions);
     // console.log(action_probs);
 
     return (
       <div>
+        <div className="heatmap">
+          <HeatMap xLabels={['Prob']} yLabels={considered_prototype_actions} data={prototype_action_score} xLabelWidth="250px" />
+        </div>
+
+
         <div className="heatmap">
           <HeatMap xLabels={['Prob']} yLabels={considered_actions} data={action_probs} xLabelWidth="250px" />
         </div>
