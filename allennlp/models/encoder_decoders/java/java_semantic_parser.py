@@ -59,13 +59,14 @@ class JavaSemanticParser(Model):
                  dropout: float = 0.0,
                  num_linking_features: int = 8,
                  rule_namespace: str = 'rule_labels',
-                 attention_function: SimilarityFunction = None) -> None:
+                 attention_function: SimilarityFunction = None,
+                 should_copy_proto_actions: bool = True) -> None:
         super(JavaSemanticParser, self).__init__(vocab)
         self._utterance_embedder = utterance_embedder
         # self._embed_terminals = True
         # self._nonterminal_embedder = nonterminal_embedder
         # self._terminal_embedder = nonterminal_embedder
-
+        self._should_copy_proto_actions = should_copy_proto_actions
         self._max_decoding_steps = max_decoding_steps
         self._decoder_beam_search = decoder_beam_search
 
@@ -81,7 +82,7 @@ class JavaSemanticParser(Model):
         #                                      attention_function=attention_function,
         #                                      nonterminal_embedder=nonterminal_embedder)
         self._decoder_trainer = MaximumLikelihood()
-        self._partial_production_rule_accuracy = Average()
+        # self._partial_production_rule_accuracy = Average()
         self._code_bleu = Average()
         self._exact_match_accuracy = Average()
 
@@ -112,7 +113,8 @@ class JavaSemanticParser(Model):
                                              action_embedder=self._action_embedder,
                                              action_embedding_dim=action_embedding_dim,
                                              attention_function=attention_function,
-                                             dropout=dropout)
+                                             dropout=dropout,
+                                             should_copy_proto_actions=should_copy_proto_actions)
 
         em_correct = open('debug/em_correct.txt', 'w+')
         em_incorrect = open('debug/em_incorrect.txt', 'w+')
@@ -322,7 +324,7 @@ class JavaSemanticParser(Model):
                     if rules is not None:
                         # todo(rajas): average action history function could
                         # become a one liner with pred_rules and targ_rules
-                        partial_parse_acc = self._average_action_history_match(best_final_states[i][0].action_history[0], rules[i])
+                        # partial_parse_acc = self._average_action_history_match(best_final_states[i][0].action_history[0], rules[i])
                         targ_action_history = rules[i].long().data.cpu().numpy().tolist()
                         targ_rules = self._get_rules_from_action_history(targ_action_history, actions[i])
 
@@ -335,7 +337,7 @@ class JavaSemanticParser(Model):
                             em = 1
 
 
-                    self._partial_production_rule_accuracy(partial_parse_acc)
+                    # self._partial_production_rule_accuracy(partial_parse_acc)
                     self._code_bleu(bleu)
                     self._exact_match_accuracy(em)
                     outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history)
@@ -531,7 +533,7 @@ class JavaSemanticParser(Model):
         return {
             'bleu': self._code_bleu.get_metric(reset),
             'em': self._exact_match_accuracy.get_metric(reset),
-            'partial_acc': self._partial_production_rule_accuracy.get_metric(reset)
+            # 'partial_acc': self._partial_production_rule_accuracy.get_metric(reset)
 
         }
 
@@ -683,6 +685,7 @@ class JavaSemanticParser(Model):
         action_embedding_dim = params.pop_int("action_embedding_dim")
         dropout = params.pop_float('dropout', 0.0)
         num_linking_features = params.pop_int('num_linking_features', 8)
+        should_copy_proto_actions = params.pop_bool('should_copy_proto_actions', True)
         decoder_beam_search = BeamSearch.from_params(params.pop("decoder_beam_search"))
         mixture_feedforward_type = params.pop('mixture_feedforward', None)
         if mixture_feedforward_type is not None:
@@ -715,4 +718,5 @@ class JavaSemanticParser(Model):
                    max_decoding_steps=max_decoding_steps,
                    decoder_beam_search=decoder_beam_search,
                    num_linking_features=num_linking_features,
-                   dropout=dropout)
+                   dropout=dropout,
+                   should_copy_proto_actions=should_copy_proto_actions)

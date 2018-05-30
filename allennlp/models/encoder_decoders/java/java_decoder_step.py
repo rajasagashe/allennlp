@@ -31,6 +31,7 @@ from allennlp.models.encoder_decoders.java.java_decoder_state import JavaDecoder
 from allennlp.nn.util import batched_index_select
 
 
+
 class JavaDecoderStep(DecoderStep[JavaDecoderState]):
     def __init__(self,
                  encoder_output_dim: int,
@@ -38,11 +39,12 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                  action_embedding_dim: int,
                  attention_function: SimilarityFunction,
                  mixture_feedforward: FeedForward = None,
-                 dropout: float = 0.0) -> None:
+                 dropout: float = 0.0,
+                 should_copy_proto_actions: bool = True) -> None:
         super(JavaDecoderStep, self).__init__()
         self._action_embedder = action_embedder
         self._mixture_feedforward = mixture_feedforward
-
+        self._should_copy_proto_actions = should_copy_proto_actions
         self._input_attention = Attention(attention_function)
 
         self._identifier_literal_action_embedding = torch.nn.Parameter(torch.FloatTensor(action_embedding_dim))
@@ -133,21 +135,31 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         utt_final_encoder_outputs = torch.stack([state.rnn_state[0].utt_final_encoder_outputs[i] for i in state.batch_indices])
         proto_utt_final_encoder_outputs= torch.stack([state.rnn_state[0].proto_utt_final_encoder_outputs[i] for i in state.batch_indices])
 
-        attended_proto_utt, _ = self.attend_on_question(hidden_state,
-                                                        proto_utt_encoder_outputs,
-                                                        proto_utt_encoder_output_mask.float())
 
         attended_question, attention_weights = self.attend_on_question(hidden_state,
                                                                        encoder_outputs,
                                                                        encoder_output_mask.float())
 
-        # recent changes mod r
-        # proto attention is not function of the attened question
-        attended_proto_rules, proto_attention_weights = self.attend_on_question(hidden_state,
-                                                         proto_rules_encoder_outputs,
-                                                         proto_rules_encoder_output_mask.float())
-        # mod rajas
-        attended_question = attended_proto_rules
+        if self._should_copy_proto_actions:
+            # recent changes mod r
+            # proto attention is not function of the attened question
+            attended_proto_rules, proto_attention_weights = self.attend_on_question(hidden_state,
+                                                             proto_rules_encoder_outputs,
+                                                             proto_rules_encoder_output_mask.float())
+            same_att_weights_on_proto_utt = True
+            if same_att_weights_on_proto_utt:
+                trunc = attention_weights.size(1)
+                if proto_utt_encoder_outputs.size(1) < trunc:
+                    trunc = proto_utt_encoder_outputs.size(1)
+
+                masked_outputs = proto_utt_encoder_outputs * proto_utt_encoder_output_mask.unsqueeze(-1).float()
+                attended_proto_utt = util.weighted_sum(masked_outputs[:,:trunc,:], attention_weights[:, :trunc])
+            else:
+                attended_proto_utt, _ = self.attend_on_question(hidden_state,
+                                                            proto_utt_encoder_outputs,
+                                                            proto_utt_encoder_output_mask.float())
+
+                attended_question = attended_proto_rules
 
         # To predict an action, we'll use a concatenation of the hidden state and attention over
         # the question.  We'll just predict an _embedding_, which we will compare to embedded
@@ -164,20 +176,24 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         else:
             considered_actions, actions_to_embed, actions_to_link = self._get_actions_to_consider(state)
 
-        action_attention_indices, action_attention_mask, action_indices = self.get_action_prototype_attention_indices(state, actions_to_embed)
+        if self._should_copy_proto_actions:
+            action_attention_indices, action_attention_mask, action_indices = self.get_action_prototype_attention_indices(state, actions_to_embed)
 
-        summed_proto_attention = self.get_summed_proto_action_attention(
-                                          hidden_state,
-                                          action_attention_indices,
-                                          action_attention_mask,
-                                          action_indices,
-                                          proto_attention_weights,
-                                          attended_question,
-                                          attended_proto_utt)
-                                          # recent changes mod r
-                                          #utt_final_encoder_outputs,
-                                          #proto_utt_final_encoder_outputs)
-
+            summed_proto_attention = self.get_summed_proto_action_attention(
+                                              hidden_state,
+                                              action_attention_indices,
+                                              action_attention_mask,
+                                              action_indices,
+                                              proto_attention_weights,
+                                              attended_question,
+                                              attended_proto_utt)
+                                              # recent changes mod r
+                                              #utt_final_encoder_outputs,
+                                              #proto_utt_final_encoder_outputs)
+        else:
+            summed_proto_attention = None
+            action_indices = None
+            proto_attention_weights = None
 
         num_actions = [len(action_list) for action_list in actions_to_embed]
         max_num_actions = max(num_actions)
@@ -193,7 +209,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             embedded_action_logits = action_embeddings.bmm(predicted_action_embedding.unsqueeze(-1)).squeeze(-1)
 
             # mod rajas
-            embedded_action_logits.scatter_add_(dim=1, index=action_indices, src=summed_proto_attention)
+            if self._should_copy_proto_actions:
+                embedded_action_logits.scatter_add_(dim=1, index=action_indices, src=summed_proto_attention)
             # embedded_action_logits = embedded_action_logits + summed_proto_attention
 
             if actions_to_link:
@@ -268,7 +285,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                             max_actions=max_actions,
                                             summed_proto_attention=summed_proto_attention,
                                             action_indices=action_indices,
-                                            actions_to_embed=actions_to_embed)
+                                            actions_to_embed=actions_to_embed,
+                                            should_copy_proto_actions=self._should_copy_proto_actions)
 
     def get_summed_proto_action_attention(self,
                                           hidden_state,
@@ -276,8 +294,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                           action_attention_mask,
                                           action_indices,
                                           proto_attention_weights,
-                                          utt_final_encoder_outputs,
-                                          proto_utt_final_encoder_outputs):
+                                          utt_represeantation,
+                                          proto_utt_representation):
 
         # (group_size, num_actions, max_num_proto_occurrences, 1)
         proto_attention = batched_index_select(proto_attention_weights.unsqueeze(-1), action_attention_indices)
@@ -295,12 +313,13 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
         # cosine similarity over the utternaces
         cosine_sim = CosineSimilarity()
-        utt_similarity = cosine_sim(proto_utt_final_encoder_outputs, utt_final_encoder_outputs)
+        # group, hidden
+        utt_similarity = cosine_sim(proto_utt_representation, utt_represeantation)
 
         x = self.utt_sim_linear(utt_similarity.unsqueeze(-1))  # .squeeze(-1)
         # recent changes mod r
         y = torch.nn.functional.relu(self.hidden_copy_proto_rule_mlp(hidden_state))
-        x = x * y
+        x = x + y
         summed_proto_attention = x * summed_proto_attention
         return summed_proto_attention
 
@@ -684,7 +703,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                             max_actions: int = None,
                             summed_proto_attention = None,
                             action_indices = None,
-                            actions_to_embed = None
+                            actions_to_embed = None,
+                            should_copy_proto_actions= True
                             ) -> List[JavaDecoderState]:
         # Each group index here might get accessed multiple times, and doing the slicing operation
         # each time is more expensive than doing it once upfront.  These three lines give about a
@@ -705,17 +725,23 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             sorted_log_probs_cpu = sorted_log_probs.data.cpu().numpy()
         if state.debug_info is not None:
             probs_cpu = log_probs.exp().data.cpu().numpy().tolist()
-            prototype_action_score = summed_proto_attention.data.cpu().numpy().tolist()
-            considered_proto_actions = action_indices.data.cpu().numpy().tolist()
-            new_actions = []
-            for group_index, proto_action_index in enumerate(considered_proto_actions):
-                new_actions.append([])
-                for i in range(len(proto_action_index)):
-                    # action_id = actions_to_embed[group_index][proto_action_index[i]]
-                    action_id = considered_actions[group_index][proto_action_index[i]]
-                    if action_id not in new_actions[-1]:
-                        new_actions[-1].append(action_id)
-                prototype_action_score[group_index] = prototype_action_score[group_index][:len(new_actions[-1])]
+            # prototype_action_score = [0] * log_probs.size(0)
+            # prototype_attention_weights
+            # new_actions = [0] * log_probs.size(0)
+            considered_proto_actions = None
+            new_actions = None
+            if should_copy_proto_actions:
+                prototype_action_score = summed_proto_attention.data.cpu().numpy().tolist()
+                considered_proto_actions = action_indices.data.cpu().numpy().tolist()
+                new_actions = []
+                for group_index, proto_action_index in enumerate(considered_proto_actions):
+                    new_actions.append([])
+                    for i in range(len(proto_action_index)):
+                        # action_id = actions_to_embed[group_index][proto_action_index[i]]
+                        action_id = considered_actions[group_index][proto_action_index[i]]
+                        if action_id not in new_actions[-1]:
+                            new_actions[-1].append(action_id)
+                    prototype_action_score[group_index] = prototype_action_score[group_index][:len(new_actions[-1])]
             considered_proto_actions = new_actions
 
         sorted_actions = sorted_actions.data.cpu().numpy().tolist()
@@ -778,14 +804,21 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 new_parent_states = new_parent_states + ([action_embedding] * num_nonterminals_in_rhs)
 
                 if state.debug_info is not None:
-                    debug_info = {
+                    if prototype_attention_weights is None:
+                        debug_info = {
                             'considered_actions': considered_actions[group_index],
-                            'considered_prototype_actions': considered_proto_actions[group_index],
                             'question_attention': attention_weights[group_index],
-                            'prototype_attention': prototype_attention_weights[group_index],
                             'probabilities': probs_cpu[group_index],
-                            'prototype_action_score': prototype_action_score[group_index],
-                            }
+                        }
+                    else:
+                        debug_info = {
+                                'considered_actions': considered_actions[group_index],
+                                'considered_prototype_actions': considered_proto_actions[group_index],
+                                'question_attention': attention_weights[group_index],
+                                'prototype_attention': prototype_attention_weights[group_index],
+                                'probabilities': probs_cpu[group_index],
+                                'prototype_action_score': prototype_action_score[group_index],
+                                }
                     new_debug_info = [state.debug_info[group_index] + [debug_info]]
                 else:
                     new_debug_info = None
