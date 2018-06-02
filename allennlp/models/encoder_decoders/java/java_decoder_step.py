@@ -169,7 +169,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # To predict an action, we'll use a concatenation of the hidden state and attention over
         # the question.  We'll just predict an _embedding_, which we will compare to embedded
         # representations of all valid actions to get a final output.
-        action_query = torch.cat([hidden_state, attended_question], dim=-1)
+        action_query = torch.cat([hidden_state, attended_proto_rules], dim=-1)
 
         # (group_size, action_embedding_dim)
         predicted_action_embedding = self._dropout(self._output_projection_layer(action_query))
@@ -181,7 +181,21 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         else:
             considered_actions, actions_to_embed, actions_to_link = self._get_actions_to_consider(state)
 
-
+        # get the strings for the actions considered
+        # to_debug = False
+        # for group_index, batch_index in enumerate(state.batch_indices):
+        #     print(batch_index)
+        #     for actions in considered_actions:
+        #         for i, a in enumerate(actions):
+        #             if a != -1:
+        #                 if 'IdentifierNTNt_33-->contains' == state.possible_actions[0][a][0]:
+        #                     to_debug = True
+        #                     print('index of contains', i)
+        #                     break
+                        # print(state.possible_actions[0][a][0])
+        #
+        # if to_debug:
+        #     print('yo')
         if self._should_copy_proto_actions:
             action_attention_indices, action_attention_mask, action_indices = self.get_action_prototype_attention_indices(state, actions_to_embed)
 
@@ -218,9 +232,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 proto_mixture_weight = self._prototype_feedforward(input)
                 # print(proto_mixture_weight)
                 # print(proto_action_probs)
-                proto_mix1 = torch.log(proto_mixture_weight)
-                proto_mix2 = torch.log(1 - proto_mixture_weight)
-                print(proto_mixture_weight)
+                log_proto_mix1 = torch.log(proto_mixture_weight)
+                proto_mix2 = 1 - proto_mixture_weight
 
 
             # embedded_action_logits = embedded_action_logits + proto_action_probs
@@ -249,10 +262,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                                     embedded_action_mask.float()) + mix2
 
                     if self._should_copy_proto_actions:
-                        entity_action_probs = entity_action_probs + proto_mix1
-                        embedded_action_probs = embedded_action_probs + proto_mix1
+                        entity_action_probs = entity_action_probs + log_proto_mix1
+                        embedded_action_probs = embedded_action_probs + log_proto_mix1
 
-                        proto_action_probs = self.combine_embedded_proto_action_probs(embedded_action_probs, proto_action_probs, proto_action_probs_mask.float(), action_indices, proto_mix2)
+                        embedded_action_probs, proto_action_probs = self.combine_embedded_proto_action_probs(embedded_action_probs, proto_action_probs, proto_action_probs_mask.float(), action_indices, proto_mix2)
 
                     current_log_probs = torch.cat([embedded_action_probs, entity_action_probs], dim=1)
                 else:
@@ -265,8 +278,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 current_log_probs = util.masked_log_softmax(action_logits, action_mask)
 
                 if self._should_copy_proto_actions:
-                    current_log_probs = current_log_probs + proto_mix1
-                    proto_action_probs = self.combine_embedded_proto_action_probs(current_log_probs, proto_action_probs,
+                    current_log_probs = current_log_probs + log_proto_mix1
+                    current_log_probs, proto_action_probs = self.combine_embedded_proto_action_probs(current_log_probs, proto_action_probs,
                                                              proto_action_probs_mask.float(), action_indices, proto_mix2)
         else:
             entity_action_logits, entity_action_mask = \
@@ -280,6 +293,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         debug_print("Time for take step", (take_step_end - take_step_start)* 1000)
 
         log_probs = scores_so_far + current_log_probs
+
+        attended_question = attended_proto_rules
 
         if allowed_actions is not None:
             # This method is slow but integrates well with beam search, so use it
@@ -308,6 +323,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                             prototype_attention_weights=proto_attention_weights,
                                             max_actions=max_actions,
                                             proto_action_probs=proto_action_probs,
+                                            proto_action_probs_mask=proto_action_probs_mask,
                                             action_indices=action_indices,
                                             actions_to_embed=actions_to_embed,
                                             should_copy_proto_actions=self._should_copy_proto_actions)
@@ -318,9 +334,17 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                             proto_action_probs_mask,
                                             action_indices,
                                             proto_mix):
-        proto_action_probs = proto_action_probs + (proto_action_probs_mask * proto_mix)
-        embedded_action_probs.scatter_add_(dim=1, index=action_indices, src=proto_action_probs)
-        return proto_action_probs
+
+        proto_action_probs = proto_action_probs * (proto_action_probs_mask * proto_mix)
+
+        proto_action_probs_resized = Variable(embedded_action_probs.data.new(embedded_action_probs.size()).fill_(0)).float() + 1e-30
+        proto_action_probs_resized.scatter_add_(dim=1, index=action_indices, src=proto_action_probs)
+        # print(proto_action_probs_resized)
+        proto_action_probs_resized = proto_action_probs_resized.log()
+
+        combined_action_probs = util.logsumexp(torch.stack([proto_action_probs_resized, embedded_action_probs], dim=2))
+
+        return combined_action_probs, proto_action_probs_resized
 
     @staticmethod
     def get_summed_proto_action_attention(action_attention_indices,
@@ -344,21 +368,11 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         action_attention_mask = torch.sum(action_attention_mask, dim=-1)
         proto_action_probs_mask = util.get_text_field_mask({'text': action_attention_mask})
 
-        proto_action_probs = util.masked_log_softmax(summed_proto_attention,
+        proto_action_probs = util.masked_softmax(summed_proto_attention,
                                                      proto_action_probs_mask.float())
         proto_action_probs = proto_action_probs * proto_action_probs_mask.float()
 
         return proto_action_probs, proto_action_probs_mask
-        # # cosine similarity over the utternaces
-        # cosine_sim = CosineSimilarity()
-        # # group, hidden
-        # utt_similarity = cosine_sim(proto_utt_representation, utt_represeantation)
-        #
-        # x = self.utt_sim_linear(utt_similarity.unsqueeze(-1))  # .squeeze(-1)
-        # # recent changes mod r
-        # y = torch.nn.functional.relu(self.hidden_copy_proto_rule_mlp(hidden_state))
-        # x = x + y
-        # summed_proto_attention = x * summed_proto_attention
 
     @staticmethod
     def get_action_prototype_attention_indices(state, actions_to_embed):
@@ -741,6 +755,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                             prototype_attention_weights: torch.Tensor,
                             max_actions: int = None,
                             proto_action_probs = None,
+                            proto_action_probs_mask = None,
                             action_indices = None,
                             actions_to_embed = None,
                             should_copy_proto_actions= True
@@ -771,6 +786,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             new_actions = None
             if should_copy_proto_actions:
                 prototype_action_probs = proto_action_probs.exp().data.cpu().numpy().tolist()
+                prototype_action_probs_mask = proto_action_probs_mask.data.cpu().numpy().tolist()
                 considered_proto_actions = action_indices.data.cpu().numpy().tolist()
                 new_actions = []
                 for group_index, proto_action_index in enumerate(considered_proto_actions):
@@ -778,9 +794,12 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                     for i in range(len(proto_action_index)):
                         # action_id = actions_to_embed[group_index][proto_action_index[i]]
                         action_id = considered_actions[group_index][proto_action_index[i]]
-                        if action_id not in new_actions[-1]:
+                        # if action_id not in new_actions[-1]:
+                        if prototype_action_probs_mask[group_index][i] != 0:
                             new_actions[-1].append(action_id)
                     prototype_action_probs[group_index] = prototype_action_probs[group_index][:len(new_actions[-1])]
+                    # if len(new_actions[-1]) == 0:
+                    #     print('yo')
             considered_proto_actions = new_actions
 
         sorted_actions = sorted_actions.data.cpu().numpy().tolist()

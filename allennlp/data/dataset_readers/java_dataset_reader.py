@@ -56,6 +56,8 @@ class JavaDatasetReader(DatasetReader):
     #         self.children = children
     #         self.rule = rule
     #         self.desc = desc
+    #     def __str__(self):
+    #         return self.rule
     # def is_nonterminal(self, nt):
     #     return nt[0].isupper()
     # def _is_terminal_rule(self, rule):
@@ -293,12 +295,14 @@ class JavaDatasetReader(DatasetReader):
 
         # toks = ['<CURR>'] + utterance[:10]
         # toks += ['<PROTOTYPE>'] + proto_tokens[:10]
-        toks = self.split_camel_case(methodName) + ['<SEP>'] + utterance[:25]
+        # toks = self.split_camel_case(methodName) + ['<SEP>'] + utterance[:25]
+        toks = utterance[:25]
         utterance_tokens = [Token(t.lower()) for t in toks]
         utterance_field = TextField(utterance_tokens, self._utterance_indexers)
 
 
-        proto_toks = self.split_camel_case(protoMethodName) +['<SEP>'] + proto_tokens[:25]
+        # proto_toks = self.split_camel_case(protoMethodName) +['<SEP>'] + proto_tokens[:25]
+        proto_toks = proto_tokens[:25]
         proto_utterance_tokens = [Token(t.lower()) for t in proto_toks]
         proto_utterance_field = TextField(proto_utterance_tokens, self._utterance_indexers)
 
