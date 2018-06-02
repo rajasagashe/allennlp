@@ -52,6 +52,7 @@ class JavaSemanticParser(Model):
                  encoder: Seq2SeqEncoder,
                  proto_encoder: Seq2SeqEncoder,
                  mixture_feedforward: FeedForward,
+                 prototype_feedforward: FeedForward,
                  # nonterminal_embedder: TextFieldEmbedder,
                  max_decoding_steps: int,
                  decoder_beam_search: BeamSearch,
@@ -110,6 +111,7 @@ class JavaSemanticParser(Model):
 
         self._decoder_step = JavaDecoderStep(encoder_output_dim=self._encoder.get_output_dim(),
                                              mixture_feedforward=mixture_feedforward,
+                                             prototype_feedforward=prototype_feedforward,
                                              action_embedder=self._action_embedder,
                                              action_embedding_dim=action_embedding_dim,
                                              attention_function=attention_function,
@@ -380,19 +382,26 @@ class JavaSemanticParser(Model):
                         actions.append((action_mapping[(batch_index, action)], probability))
                 actions.sort()
                 considered_actions, probabilities = zip(*actions)
+
                 action_info['considered_actions'] = considered_actions
                 action_info['action_probabilities'] = probabilities
 
                 considered_prototype_actions = action_debug_info['considered_prototype_actions']
-                prototype_action_score = action_debug_info['prototype_action_score']
+                prototype_action_probs = action_debug_info['prototype_action_probs']
+                # print('sem parser decode')
+                # print(considered_prototype_actions)
+                # print(prototype_action_probs)
                 actions = []
-                for action, probability in zip(considered_prototype_actions, prototype_action_score):
+                for action, probability in zip(considered_prototype_actions, prototype_action_probs):
                     if action != -1:
                         actions.append((action_mapping[(batch_index, action)], probability))
                 actions.sort()
-                considered_prototype_actions, prototype_action_score = zip(*actions)
+                if len(actions) != 0:
+                    considered_prototype_actions, prototype_action_probs = zip(*actions)
+                else:
+                    considered_prototype_actions, prototype_action_probs = [], []
                 action_info['considered_prototype_actions'] = considered_prototype_actions
-                action_info['prototype_action_score'] = prototype_action_score
+                action_info['prototype_action_probs'] = prototype_action_probs
 
                 action_info['question_attention'] = action_debug_info['question_attention']
                 action_info['prototype_attention'] = action_debug_info['prototype_attention']
@@ -692,6 +701,13 @@ class JavaSemanticParser(Model):
             mixture_feedforward = FeedForward.from_params(mixture_feedforward_type)
         else:
             mixture_feedforward = None
+
+        prototype_feedforward_type = params.pop('prototype_feedforward', None)
+        if prototype_feedforward_type is not None:
+            prototype_feedforward = FeedForward.from_params(prototype_feedforward_type)
+        else:
+            prototype_feedforward = None
+
         # nonterminal_embedder = TextFieldEmbedder.from_params(vocab, params.pop("nonterminal_embedder"))
         # terminal_embedder_params = params.pop('terminal_embedder', None)
         # if terminal_embedder_params:
@@ -712,6 +728,7 @@ class JavaSemanticParser(Model):
                    proto_encoder=proto_encoder,
                    attention_function=attention_function,
                    mixture_feedforward=mixture_feedforward,
+                   prototype_feedforward=prototype_feedforward,
                    # nonterminal_embedder=nonterminal_embedder,
                    # terminal_embedder=terminal_embedder,
                    action_embedding_dim=action_embedding_dim,
