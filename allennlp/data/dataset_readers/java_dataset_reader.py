@@ -106,6 +106,9 @@ class JavaDatasetReader(DatasetReader):
         # if self._num_dataset_instances != -1:
         #     dataset = dataset[:self._num_dataset_instances]
 
+        # todo(rajas): change the MethodDeclaration rule to have
+        # function instead of IdentifierNT
+
         modified_rules = self.split_identifier_rule_into_multiple(
             [d['rules'] for d in dataset]
         )
@@ -263,6 +266,20 @@ class JavaDatasetReader(DatasetReader):
         rule2index[PLAIN_IDENTIFIER_RULE] = index
         return production_rule_fields, rule2index
 
+    def gen_edit_string(self, target, prototype):
+        add = []
+        delete = []
+        for w in prototype:
+            if w not in target:
+                delete.append(w)
+        for w in target:
+            if w not in prototype:
+                add.append(w)
+        add = add[:20]
+        delete = delete[:20]
+        return add, delete
+        # return '<ADD>' + ' '.join(add) + ' <DELETE>' + ' '.join(delete)
+
     @overrides
     def text_to_instance(self,  # type: ignore
                          utterance: List[str],
@@ -296,6 +313,8 @@ class JavaDatasetReader(DatasetReader):
         # toks = ['<CURR>'] + utterance[:10]
         # toks += ['<PROTOTYPE>'] + proto_tokens[:10]
         # toks = self.split_camel_case(methodName) + ['<SEP>'] + utterance[:25]
+
+
         toks = utterance[:25]
         utterance_tokens = [Token(t.lower()) for t in toks]
         utterance_field = TextField(utterance_tokens, self._utterance_indexers)
@@ -306,7 +325,15 @@ class JavaDatasetReader(DatasetReader):
         proto_utterance_tokens = [Token(t.lower()) for t in proto_toks]
         proto_utterance_field = TextField(proto_utterance_tokens, self._utterance_indexers)
 
+        add, delete = self.gen_edit_string(target=toks, prototype=proto_toks)
+        edit_add_tokens = [Token(t.lower()) for t in add]
+        edit_delete_tokens = [Token(t.lower()) for t in delete]
+        edit_add_field = TextField(edit_add_tokens, self._utterance_indexers)
+        edit_delete_field = TextField(edit_delete_tokens, self._utterance_indexers)
+
         metadata_dict = {'utterance':  toks,
+                         'edit_add': add,
+                         'edit_delete': delete,
                          'prototype_utterance': proto_toks,
                          'variableNames':  variable_names,
                          'variableTypes':  variable_types,
@@ -362,6 +389,8 @@ class JavaDatasetReader(DatasetReader):
 
         fields.update({"utterance": utterance_field,
                        "prototype_utterance": proto_utterance_field,
+                       "edit_add": edit_add_field,
+                       "edit_delete": edit_delete_field,
                        # "variable_names": variable_name_fields,
                        # "variable_types": variable_types_field,
                        # "method_names": method_name_fields,

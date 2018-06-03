@@ -135,6 +135,8 @@ class JavaSemanticParser(Model):
     def forward(self,  # type: ignore
                 utterance: Dict[str, torch.LongTensor],
                 prototype_utterance: Dict[str, torch.LongTensor],
+                edit_add: Dict[str, torch.LongTensor],
+                edit_delete: Dict[str, torch.LongTensor],
                 # variable_names: Dict[str, torch.LongTensor],
                 # variable_types: Dict[str, torch.LongTensor],
                 # method_names: Dict[str, torch.LongTensor],
@@ -146,6 +148,21 @@ class JavaSemanticParser(Model):
                 prototype_rules: List[torch.Tensor] = None,
                 metadata: List[Dict[str, str]] = None
                 ) -> Dict[str, torch.Tensor]:
+
+
+        # edits
+        # (batch_size, edit_seq_length, embedding_dim)
+        embedded_edit_add = self._utterance_embedder(edit_add)
+        # (batch_size, edit_seq_length)
+        add_mask = get_text_field_mask(edit_add)
+        embedded_edit_delete = self._utterance_embedder(edit_delete)
+        delete_mask = get_text_field_mask(edit_delete)
+
+        embedded_edit_add = embedded_edit_add * add_mask.unsqueeze(-1).float()
+        embedded_edit_delete = embedded_edit_delete * delete_mask.unsqueeze(-1).float()
+
+        summed_edit_add = torch.sum(embedded_edit_add, dim=1)
+        summed_edit_delete = torch.sum(embedded_edit_delete, dim=1)
 
         # Encode summary, variables, methods with bi lstm.
         ##################################################
@@ -277,7 +294,9 @@ class JavaSemanticParser(Model):
                                          proto_actions=proto_actions,
                                          proto_mask=proto_mask_lst,
                                          # entity_types=entity_type_dict,
-                                         debug_info=None)
+                                         debug_info=None,
+                                         edit_add=summed_edit_add,
+                                         edit_delete=summed_edit_delete)
 
 
         if self.training:
@@ -517,6 +536,8 @@ class JavaSemanticParser(Model):
         log += self.indent(metadata['prototype_code']) + '\n'
         log += 'Target========\n'
         log += 'NL:' + ' '.join(metadata['utterance']) + '\n'
+        log += 'EditAdd:' + ' '.join(metadata['edit_add']) + '\n'
+        log += 'EditDelete:' + ' '.join(metadata['edit_delete']) + '\n'
         log += 'methodName:' + (metadata['methodName']) + '\n'
         log += self.indent(metadata['code']) + '\n'
         log += 'Prediction====\n'

@@ -26,6 +26,8 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                  actions_to_entities: Dict[Tuple[int, int], int],
                  proto_actions:List[List[int]],
                  proto_mask:List[List[int]],
+                 edit_add: List[torch.Tensor],
+                 edit_delete: List[torch.Tensor],
                  debug_info: List = None
                  # prev_rules: List[torch.Tensor],
                  # nonterminal2parent_rules: List[Dict[str, torch.LongTensor]],
@@ -42,6 +44,9 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         self.debug_info = debug_info
         self.proto_actions = proto_actions
         self.proto_mask = proto_mask
+
+        self.edit_add = edit_add
+        self.edit_delete = edit_delete
         # self.nonterminal_action_indices = nonterminal_action_indices
         # self.prev_rules = prev_rules
         # self.nonterminal2parent_rules = nonterminal2parent_rules
@@ -69,6 +74,9 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         proto_actions = [proto_actions for state in states for proto_actions in state.proto_actions]
         proto_actions_mask = [proto_mask for state in states for proto_mask in state.proto_mask]
 
+        edit_adds = [edit_add for state in states for edit_add in state.edit_add]
+        edit_deletes = [edit_delete for state in states for edit_delete in state.edit_delete]
+
         if states[0].debug_info is not None:
             debug_info = [debug_info for state in states for debug_info in state.debug_info]
         else:
@@ -95,6 +103,8 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                                 actions_to_entities=states[0].actions_to_entities,
                                 proto_actions=proto_actions,
                                 proto_mask=proto_actions_mask,
+                                edit_add=edit_adds,
+                                edit_delete=edit_deletes,
                                 debug_info=debug_info
                                 # nonterminals=nonterminals,
                                 # nonterminal_action_indices=nonterminal_action_indices,

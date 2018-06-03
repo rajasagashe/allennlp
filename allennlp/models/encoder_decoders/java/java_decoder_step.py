@@ -61,7 +61,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # Our decoder input will be the concatenation of the decoder hidden state and the previous
         # action embedding, and we'll project that down to the decoder's `input_dim`, which we
         # arbitrarily set to be the same as `output_dim`.
-        self._input_projection_layer = Linear(output_dim + 2 * action_embedding_dim, input_dim)
+        self._input_projection_layer = Linear(output_dim + 2 * action_embedding_dim + 2 * action_embedding_dim, input_dim)
         # Before making a prediction, we'll compute an attention over the input given our updated
         # hidden state.  Then we concatenate that with the decoder state and project to
         # `action_embedding_dim` to make a prediction.
@@ -107,17 +107,21 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # The parent is the top most element on the parent_states stack.
         parent_action_embedding = torch.stack([rnn_state.parent_states[-1]
                                                for rnn_state in state.rnn_state])
-        endtime1 = time.time()
-        timediff1 = endtime1 - take_step_start
+
+        edit_add_vec = torch.stack([edit_add for edit_add in state.edit_add])
+        edit_delete_vec = torch.stack([edit_delete for edit_delete in state.edit_delete])
 
         # The scores from all prior state transitions until now.  Shape: (group_size, 1).
         scores_so_far = torch.stack(state.score)
 
         start_decoding = time.time()
         # (group_size, decoder_input_dim)
-        decoder_input = self._input_projection_layer(torch.cat([attended_question,
-                                                                previous_action_embedding,
-                                                                parent_action_embedding], -1))
+        catted_input = torch.cat([attended_question,
+                                  previous_action_embedding,
+                                  parent_action_embedding,
+                                  edit_add_vec,
+                                  edit_delete_vec], -1)
+        decoder_input = self._input_projection_layer(catted_input)
 
         hidden_state, memory_cell = self._decoder_cell(decoder_input, (hidden_state, memory_cell))
         hidden_state = self._dropout(hidden_state)
@@ -141,6 +145,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         attended_question, attention_weights = self.attend_on_question(hidden_state,
                                                                        encoder_outputs,
                                                                        encoder_output_mask.float())
+        # attention_weights = None
 
         if self._should_copy_proto_actions:
             # recent changes mod r
@@ -149,22 +154,12 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                              proto_rules_encoder_outputs,
                                                              proto_rules_encoder_output_mask.float())
 
-            # todo(rajas) remove this if statement
-            same_att_weights_on_proto_utt = False
-            if same_att_weights_on_proto_utt:
-                print("Not in here")
-                # trunc = attention_weights.size(1)
-                # if proto_utt_encoder_outputs.size(1) < trunc:
-                #     trunc = proto_utt_encoder_outputs.size(1)
-                #
-                # masked_outputs = proto_utt_encoder_outputs * proto_utt_encoder_output_mask.unsqueeze(-1).float()
-                # attended_proto_utt = util.weighted_sum(masked_outputs[:,:trunc,:], attention_weights[:, :trunc])
-            else:
-                attended_proto_utt, _ = self.attend_on_question(hidden_state,
-                                                            proto_utt_encoder_outputs,
-                                                            proto_utt_encoder_output_mask.float())
 
-                # attended_question = attended_proto_rules
+            # attended_proto_utt, _ = self.attend_on_question(hidden_state,
+            #                                             proto_utt_encoder_outputs,
+            #                                 proto_utt_encoder_output_mask.float())
+
+
 
         # To predict an action, we'll use a concatenation of the hidden state and attention over
         # the question.  We'll just predict an _embedding_, which we will compare to embedded
@@ -224,10 +219,13 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
             # mod rajas
             if self._should_copy_proto_actions:
-                cosine_sim = CosineSimilarity()
-                utt_similarity = cosine_sim(attended_proto_utt, attended_question)
-                x = self.utt_sim_linear(utt_similarity.unsqueeze(-1))  # .squeeze(-1)
-                input = torch.cat([hidden_state, x], dim=1)
+                # cosine_sim = CosineSimilarity()
+                # utt_similarity = cosine_sim(attended_proto_utt, attended_question)
+                # x = self.utt_sim_linear(utt_similarity.unsqueeze(-1))  # .squeeze(-1)
+                # input = torch.cat([hidden_state, x], dim=1)
+                # todo(rajas) experiment with this input being the attended
+                # prototype rules
+                input = hidden_state
 
                 proto_mixture_weight = self._prototype_feedforward(input)
                 # print(proto_mixture_weight)
@@ -645,7 +643,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
     def _get_entity_action_logits(self,
                                   state: JavaDecoderState,
                                   actions_to_link: List[List[int]],
-                                  attention_weights: torch.Tensor) -> Tuple[torch.FloatTensor,
+                                  attention_weights: torch.Tensor=None) -> Tuple[torch.FloatTensor,
                                                                             torch.LongTensor,
                                                                             torch.FloatTensor]:
         """
@@ -733,7 +731,11 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
         # Now we get action logits by weighting these entity x token scores by the attention over
         # the question tokens.  We can do this efficiently with torch.bmm.
-        action_logits = action_linking.bmm(attention_weights.unsqueeze(-1)).squeeze(-1)
+        # action_logits = action_linking.bmm(attention_weights.unsqueeze(-1)).squeeze(-1)
+        # print('actionlogits', action_logits.size())
+        # print('actionlinking', action_linking.size())
+        # print('actionlinking', attention_weights.size())
+        action_logits = torch.sum(action_linking, dim=-1)
 
         # Finally, we make a mask for our action logit tensor.
         sequence_lengths = Variable(action_linking.data.new(num_actions))
@@ -909,7 +911,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                              proto_actions=[state.proto_actions[group_index]],
                                              proto_mask=[state.proto_mask[group_index]],
                                              # entity_types=state.entity_types,
-                                             debug_info=new_debug_info)
+                                             debug_info=new_debug_info,
+                                             edit_add=[state.edit_add[group_index]],
+                                             edit_delete=[state.edit_delete[group_index]]
+                                             )
                 new_states.append(new_state)
         end2 = time.time()
         # print('compute new initialize new state time', (end2-time2)*1000)
@@ -991,7 +996,9 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                          proto_actions=[state.proto_actions[group_index]],
                                          proto_mask=[state.proto_mask[group_index]],
                                          # entity_types=state.entity_types,
-                                         debug_info=None)
+                                         debug_info=None,
+                                         edit_add=[state.edit_add[group_index]],
+                                         edit_delete=[state.edit_delete[group_index]])
             new_states.append(new_state)
 
 
