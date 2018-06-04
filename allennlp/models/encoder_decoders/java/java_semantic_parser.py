@@ -178,14 +178,8 @@ class JavaSemanticParser(Model):
         proto_mask = get_text_field_mask({'text': proto_mask_tens})
         end1 = time.time()
         # print("Time for proto rule embeddings", (end1 - start1) * 1000)
-        # todo(rajas) change the encoder
         encoder_proto_out = self._dropout(self._proto_encoder(proto_embeddings, proto_mask))
 
-        # # todo(rajas) bidirection will be set to false
-        # final_encoder_proto_out = util.get_final_encoder_states(encoder_proto_out,
-        #                                                      proto_mask,
-        #                                                      True)
-        # final_encoder_proto_out = final_encoder_proto_out.unsqueeze(1)
 
         # (batch_size, question_length, encoder_output_dim)
         encoder_outputs = self._dropout(self._encoder(embedded_utterance, utterance_mask))

@@ -134,8 +134,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         proto_utt_encoder_output_mask = torch.stack(
             [state.rnn_state[0].proto_utt_encoder_output_mask[i] for i in state.batch_indices])
 
-        utt_final_encoder_outputs = torch.stack([state.rnn_state[0].utt_final_encoder_outputs[i] for i in state.batch_indices])
-        proto_utt_final_encoder_outputs= torch.stack([state.rnn_state[0].proto_utt_final_encoder_outputs[i] for i in state.batch_indices])
+        # utt_final_encoder_outputs = torch.stack([state.rnn_state[0].utt_final_encoder_outputs[i] for i in state.batch_indices])
+        # proto_utt_final_encoder_outputs= torch.stack([state.rnn_state[0].proto_utt_final_encoder_outputs[i] for i in state.batch_indices])
 
 
         attended_question, attention_weights = self.attend_on_question(hidden_state,
@@ -149,18 +149,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                              proto_rules_encoder_outputs,
                                                              proto_rules_encoder_output_mask.float())
 
-            # todo(rajas) remove this if statement
-            same_att_weights_on_proto_utt = False
-            if same_att_weights_on_proto_utt:
-                print("Not in here")
-                # trunc = attention_weights.size(1)
-                # if proto_utt_encoder_outputs.size(1) < trunc:
-                #     trunc = proto_utt_encoder_outputs.size(1)
-                #
-                # masked_outputs = proto_utt_encoder_outputs * proto_utt_encoder_output_mask.unsqueeze(-1).float()
-                # attended_proto_utt = util.weighted_sum(masked_outputs[:,:trunc,:], attention_weights[:, :trunc])
-            else:
-                attended_proto_utt, _ = self.attend_on_question(hidden_state,
+            attended_proto_utt, _ = self.attend_on_question(hidden_state,
                                                             proto_utt_encoder_outputs,
                                                             proto_utt_encoder_output_mask.float())
 
@@ -173,7 +162,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
         # (group_size, action_embedding_dim)
         predicted_action_embedding = self._dropout(self._output_projection_layer(action_query))
-        end_decoding = time.time()
 
         if allowed_actions is not None:
             actions_to_embed, actions_to_link, allowed_logit_indices = self._get_actions_to_consider_optimized(state, allowed_actions)
@@ -228,6 +216,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 utt_similarity = cosine_sim(attended_proto_utt, attended_question)
                 x = self.utt_sim_linear(utt_similarity.unsqueeze(-1))  # .squeeze(-1)
                 input = torch.cat([hidden_state, x], dim=1)
+                # input = torch.cat([attended_question, attended_proto_utt],dim=1)
 
                 proto_mixture_weight = self._prototype_feedforward(input)
                 # print(proto_mixture_weight)
@@ -235,8 +224,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 log_proto_mix1 = torch.log(proto_mixture_weight)
                 proto_mix2 = 1 - proto_mixture_weight
 
-
-            # embedded_action_logits = embedded_action_logits + proto_action_probs
 
             if actions_to_link:
                 # entity_action_logits: (group_size, num_entity_actions)
@@ -295,6 +282,11 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         log_probs = scores_so_far + current_log_probs
 
         attended_question = attended_proto_rules
+
+        # if not self._should_copy_proto_actions:
+        #     proto_attention_weights = None
+        #     proto_action_probs = None
+        #     proto_action_probs_mask = None
 
         if allowed_actions is not None:
             # This method is slow but integrates well with beam search, so use it
