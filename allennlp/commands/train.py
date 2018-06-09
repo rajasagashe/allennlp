@@ -283,7 +283,8 @@ def train_model(params: Params,
                                   train_data,
                                   validation_data,
                                   trainer_params,
-                                  extra_data=test_data)
+                                  extra_data=test_data,
+                                  files_to_archive=params.files_to_archive)
 
     evaluate_on_test = params.pop_bool("evaluate_on_test", False)
     params.assert_empty('base train command')

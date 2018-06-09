@@ -34,6 +34,7 @@ from allennlp.models.model import Model
 from allennlp.nn import util
 from allennlp.training.learning_rate_schedulers import LearningRateScheduler
 from allennlp.training.optimizers import Optimizer
+from allennlp.models.archival import archive_model
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
@@ -136,6 +137,7 @@ class Trainer:
                  train_dataset: Iterable[Instance],
                  validation_dataset: Optional[Iterable[Instance]] = None,
                  extra_dataset: Optional[Iterable[Instance]] = None,
+                 files_to_archive = None,
                  patience: int = 2,
                  validation_metric: str = "-loss",
                  num_epochs: int = 20,
@@ -227,6 +229,7 @@ class Trainer:
         self._train_data = train_dataset
         self._validation_data = validation_dataset
         self._extra_data = extra_dataset
+        self._files_to_archive = files_to_archive
 
         self._patience = patience
         self._num_epochs = num_epochs
@@ -830,6 +833,8 @@ class Trainer:
                             "Copying weights to '%s/best.th'.", self._serialization_dir)
                 shutil.copyfile(model_path, os.path.join(self._serialization_dir, "best.th"))
 
+                archive_model(self._serialization_dir, files_to_archive=self._files_to_archive)
+
             if self._num_serialized_models_to_keep:
                 self._serialized_paths.append([time.time(), model_path, training_path])
                 if len(self._serialized_paths) > self._num_serialized_models_to_keep:
@@ -943,7 +948,8 @@ class Trainer:
                     train_data: Iterable[Instance],
                     validation_data: Optional[Iterable[Instance]],
                     params: Params,
-                    extra_data: Optional[Iterable[Instance]] = None) -> 'Trainer':
+                    extra_data: Optional[Iterable[Instance]] = None,
+                    files_to_archive = None) -> 'Trainer':
 
         patience = params.pop_int("patience", 2)
         validation_metric = params.pop("validation_metric", "-loss")
@@ -974,6 +980,7 @@ class Trainer:
         return Trainer(model, optimizer, iterator,
                        train_data, validation_data,
                        extra_dataset=extra_data,
+                       files_to_archive=files_to_archive,
                        patience=patience,
                        validation_metric=validation_metric,
                        num_epochs=num_epochs,
