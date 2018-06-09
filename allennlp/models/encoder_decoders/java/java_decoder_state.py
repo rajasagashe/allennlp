@@ -26,6 +26,7 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                  actions_to_entities: Dict[Tuple[int, int], int],
                  proto_actions:List[List[int]],
                  proto_mask:List[List[int]],
+                 action_mapping = None,
                  debug_info: List = None
                  # prev_rules: List[torch.Tensor],
                  # nonterminal2parent_rules: List[Dict[str, torch.LongTensor]],
@@ -42,6 +43,8 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         self.debug_info = debug_info
         self.proto_actions = proto_actions
         self.proto_mask = proto_mask
+
+        self.action_mapping = action_mapping
         # self.nonterminal_action_indices = nonterminal_action_indices
         # self.prev_rules = prev_rules
         # self.nonterminal2parent_rules = nonterminal2parent_rules
@@ -95,6 +98,7 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                                 actions_to_entities=states[0].actions_to_entities,
                                 proto_actions=proto_actions,
                                 proto_mask=proto_actions_mask,
+                                action_mapping=states[0].action_mapping,
                                 debug_info=debug_info
                                 # nonterminals=nonterminals,
                                 # nonterminal_action_indices=nonterminal_action_indices,

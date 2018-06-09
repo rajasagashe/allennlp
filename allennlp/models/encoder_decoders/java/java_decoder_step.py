@@ -181,9 +181,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         #                     print('index of contains', i)
         #                     break
                         # print(state.possible_actions[0][a][0])
-        #
-        # if to_debug:
-        #     print('yo')
+
         if self._should_copy_proto_actions:
             action_attention_indices, action_attention_mask, action_indices = self.get_action_prototype_attention_indices(state, actions_to_embed)
 
@@ -304,6 +302,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         else:
             return self._compute_new_states(state,
                                             log_probs,
+                                            current_log_probs,
                                             hidden_state,
                                             memory_cell,
                                             action_embeddings,
@@ -336,7 +335,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
         combined_action_probs = util.logsumexp(torch.stack([proto_action_probs_resized, embedded_action_probs], dim=2))
 
-        return combined_action_probs, proto_action_probs_resized
+        return combined_action_probs, proto_action_probs
 
     @staticmethod
     def get_summed_proto_action_attention(action_attention_indices,
@@ -346,9 +345,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # (group_size, num_actions_in_proto, max_num_proto_occurrences, 1)
         proto_attention = batched_index_select(proto_attention_weights.unsqueeze(-1), action_attention_indices)
 
-        end5 = time.time()
-        # print("Time for initialization", (end4 - end3) * 1000)
-        # print("Time for batched index select", (end5 - end4) * 1000)
         proto_attention = proto_attention.squeeze(-1)
         # In the case where an action doesn't appear in the prototype, it'll just be a list
         # with 0's up to max_len and this will be filled with a valid attention value. Thus
@@ -736,6 +732,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
     # @timeit
     def _compute_new_states(state: JavaDecoderState,
                             log_probs: torch.Tensor,
+                            current_log_probs: torch.Tensor,
                             hidden_state: torch.Tensor,
                             memory_cell: torch.Tensor,
                             action_embeddings: torch.Tensor,
@@ -771,24 +768,34 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             sorted_log_probs_cpu = sorted_log_probs.data.cpu().numpy()
         if state.debug_info is not None:
             probs_cpu = log_probs.exp().data.cpu().numpy().tolist()
+            current_probs_cpu = current_log_probs.exp().data.cpu().numpy().tolist()
             # prototype_action_probs = [0] * log_probs.size(0)
             # prototype_attention_weights
             # new_actions = [0] * log_probs.size(0)
             considered_proto_actions = None
             new_actions = None
             if should_copy_proto_actions:
-                prototype_action_probs = proto_action_probs.exp().data.cpu().numpy().tolist()
+                prototype_action_probs = proto_action_probs.data.cpu().numpy().tolist()
                 prototype_action_probs_mask = proto_action_probs_mask.data.cpu().numpy().tolist()
                 considered_proto_actions = action_indices.data.cpu().numpy().tolist()
+
                 new_actions = []
                 for group_index, proto_action_index in enumerate(considered_proto_actions):
                     new_actions.append([])
                     for i in range(len(proto_action_index)):
                         # action_id = actions_to_embed[group_index][proto_action_index[i]]
                         action_id = considered_actions[group_index][proto_action_index[i]]
+
                         # if action_id not in new_actions[-1]:
+                        # astr = state.action_mapping[(state.batch_indices[group_index], action_id)]
+                        # if 'IdentifierNTPrimary-->loc0' in astr:
+                        #     print(astr)
+                            # print('yo')
+
                         if prototype_action_probs_mask[group_index][i] != 0:
                             new_actions[-1].append(action_id)
+                        else:
+                            break
                     prototype_action_probs[group_index] = prototype_action_probs[group_index][:len(new_actions[-1])]
                     # if len(new_actions[-1]) == 0:
                     #     print('yo')
@@ -858,7 +865,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                         debug_info = {
                             'considered_actions': considered_actions[group_index],
                             'question_attention': attention_weights[group_index],
-                            'probabilities': probs_cpu[group_index],
+                            # 'probabilities': probs_cpu[group_index],
+                            'probabilities': current_probs_cpu[group_index],
                         }
                     else:
                         debug_info = {
@@ -866,7 +874,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                 'considered_prototype_actions': considered_proto_actions[group_index],
                                 'question_attention': attention_weights[group_index],
                                 'prototype_attention': prototype_attention_weights[group_index],
-                                'probabilities': probs_cpu[group_index],
+                                # 'probabilities': probs_cpu[group_index],
+                                'probabilities': current_probs_cpu[group_index],
                                 'prototype_action_probs': prototype_action_probs[group_index],
                                 }
                     new_debug_info = [state.debug_info[group_index] + [debug_info]]
@@ -900,6 +909,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                              actions_to_entities=state.actions_to_entities,
                                              proto_actions=[state.proto_actions[group_index]],
                                              proto_mask=[state.proto_mask[group_index]],
+                                             action_mapping=state.action_mapping,
                                              # entity_types=state.entity_types,
                                              debug_info=new_debug_info)
                 new_states.append(new_state)
@@ -982,6 +992,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                          actions_to_entities=state.actions_to_entities,
                                          proto_actions=[state.proto_actions[group_index]],
                                          proto_mask=[state.proto_mask[group_index]],
+                                         action_mapping=state.action_mapping,
                                          # entity_types=state.entity_types,
                                          debug_info=None)
             new_states.append(new_state)

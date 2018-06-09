@@ -258,6 +258,13 @@ class JavaSemanticParser(Model):
 
         initial_grammar_state = [self._create_grammar_state(actions[i])
                                  for i in range(batch_size)]
+
+        # todo(rajas) remove this
+        action_mapping = {}
+        for batch_index, batch_actions in enumerate(actions):
+            for action_index, action in enumerate(batch_actions):
+                action_mapping[(batch_index, action_index)] = action[0]
+
         initial_state = JavaDecoderState(batch_indices=list(range(batch_size)),
                                          action_history=[[] for _ in range(batch_size)],
                                          score=initial_score_list,
@@ -270,6 +277,7 @@ class JavaSemanticParser(Model):
                                          actions_to_entities=actions_to_entities,
                                          proto_actions=proto_actions,
                                          proto_mask=proto_mask_lst,
+                                         action_mapping=action_mapping,
                                          # entity_types=entity_type_dict,
                                          debug_info=None)
 
