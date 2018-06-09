@@ -34,8 +34,17 @@ DEFAULT_MODELS = {
                 # 'java-models/type-linking-no-mixture/model.tar.gz',  # pylint: disable=line-too-long
                 # 'java-models/type-linking-only-enviro-types-no-unks/model.tar.gz',  # pylint: disable=line-too-long
                 # 'java-models/temp2/model.tar.gz',  # pylint: disable=line-too-long
-                'java-models/type-linking-only-enviro-types-no-unks-type-split-no-num-split-100000/model.tar.gz',  # pylint: disable=line-too-long the best one
+                # 'java-models/type-linking-only-enviro-types-no-unks-type-split-no-num-split-100000/model.tar.gz',  # pylint: disable=line-too-long the best one
                 # 'java-models/type-linking-only-enviro-types-no-unks-type-split-no-num-split-30000/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/type-linking-only-enviro-types-no-unks-type-split-no-num-split-80000/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/proto-diff-data-2stepattention/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/proto-temp/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/proto-attendedprotonlsim-hiddenstateprotoactionweight2/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/proto-temp/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/proto-probs-actions2/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/proto-action-probs-bugfix/model.tar.gz',  # pylint: disable=line-too-long
+                # 'java-models/proto-action-probs-bugfix-lower-dropout/model.tar.gz',  # pylint: disable=line-too-long
+                'java-models/proto-action-probs-bugfix-attended-code-passed/model.tar.gz',  # pylint: disable=line-too-long
                 'java-parser'
         ),
         # 'wikitables-parser': DemoModel(
