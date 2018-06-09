@@ -306,7 +306,7 @@ class ActionInfo extends React.Component {
     const prototype_attention = action['prototype_attention'].map(x => [x]);
 
     const considered_prototype_actions = action['considered_prototype_actions'];
-    const prototype_action_score = action['prototype_action_score'].map(x => [x]);
+    const prototype_action_score = action['prototype_action_probs'].map(x => [x]);
 
     console.log("ActionInfo");
       console.log(action_probs);

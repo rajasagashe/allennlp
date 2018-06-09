@@ -86,14 +86,29 @@ class JavaParserPredictor(Predictor):
 
         for record in self.extra_dataset:
             if (record['methodName'] == methodName and
-                record['path'] == path):
+                        record['path'] == path):
                 break
+        modified_targ_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['rules']])
+        modified_proto_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['prototype_rules']])
 
-        # now fetch record from validation dataset
-        # nl = table_text[0]
+        for rules in modified_proto_rules:
+            for i, rule in enumerate(rules):
+                # lhs, rhs = rule.split('-->')
+                # No class field/func identifier rules since these cannot be embedded
+                if rule not in self.global_rule2index:
+                    rules[i] = PLAIN_IDENTIFIER_RULE
 
-        # for row_index, line in enumerate(table_text.split('\n')):
-        #     line = line.rstrip('\n')
+        if len(lst) > 2:
+            proto_nl = lst[2].split()
+            nl = lst[3].split()
+            record['prototype_nl'] = proto_nl  # ['API', 'level', '8']
+            record['nl'] = nl  # ['API', 'level', '9']
+
+            # now fetch record from validation dataset
+            # nl = table_text[0]
+
+            # for row_index, line in enumerate(table_text.split('\n')):
+            #     line = line.rstrip('\n')
             # if ':' in line:
             #     class_category = line
             # else:
@@ -106,33 +121,30 @@ class JavaParserPredictor(Predictor):
             #     else:
             #         java_class['method_names'].append(name)
             #         java_class['method_types'].append(type)
-        modified_targ_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['rules']])
-        modified_proto_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['prototype_rules']])
 
-        for rules in modified_proto_rules:
-            for i,rule in enumerate(rules):
-                # lhs, rhs = rule.split('-->')
-                # No class field/func identifier rules since these cannot be embedded
-                if rule not in self.global_rule2index:
-                    rules[i] = PLAIN_IDENTIFIER_RULE
+        print('Natural Language')
+        print(record['prototype_nl'])
+        print(record['nl'])
         instance = self._dataset_reader.text_to_instance(record['nl'],
-                              record['varNames'],
-                              record['varTypes'],
-                              record['methodNames'],
-                              record['methodReturns'],
-                              self.global_production_rule_fields,
-                              self.global_rule2index,
+                                                         record['varNames'],
+                                                         record['varTypes'],
+                                                         record['methodNames'],
+                                                         record['methodReturns'],
+                                                         self.global_production_rule_fields,
+                                                         self.global_rule2index,
 
-                              # Pass the modified identifier rules.
-                              rules=modified_targ_rules[0],
-                              proto_rules=modified_proto_rules[0],
-                              proto_tokens=record['prototype_nl'],
-                              proto_code=record['prototype_code'],
-                              proto_og_rules=record['prototype_rules'],
-                              protoMethodName=record['prototype_methodName'],
-                              methodName=record['methodName'],
-                              code=record['code'],
-                              path=record['path'])
+                                                         # Pass the modified identifier rules.
+                                                         # rules=modified_targ_rules[0],
+                                                         rules=None,
+                                                         proto_rules=modified_proto_rules[0],
+                                                         proto_tokens=record['prototype_nl'],
+                                                         proto_code=record['prototype_code'],
+                                                         proto_og_rules=record['prototype_rules'],
+                                                         protoMethodName=record['prototype_methodName'],
+                                                         methodName=record['methodName'],
+                                                         # code=record['code'],
+                                                         code=None,
+                                                         path=record['path'])
         print("Processed tokens", instance.fields['metadata'].metadata['utterance'])
         extra_info = {'question_tokens': instance.fields['metadata'].metadata['utterance'],
                       'prototype_rules': modified_proto_rules[0]}  #record['nl']}
