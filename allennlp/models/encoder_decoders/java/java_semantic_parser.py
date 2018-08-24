@@ -86,6 +86,8 @@ class JavaSemanticParser(Model):
         # self._partial_production_rule_accuracy = Average()
         self._code_bleu = Average()
         self._exact_match_accuracy = Average()
+        self._avg_targ_log_probs = Average()
+        self._avg_pred_log_probs = Average()
 
         if dropout > 0:
             self._dropout = torch.nn.Dropout(p=dropout)
@@ -293,9 +295,11 @@ class JavaSemanticParser(Model):
                     action_mapping[(batch_index, action_index)] = action[0]
             outputs: Dict[str, Any] = {'action_mapping': action_mapping}
             if rules is not None:
-                outputs['loss'] = self._decoder_trainer.decode(initial_state,
+                mle_outputs = self._decoder_trainer.decode(initial_state,
                                              self._decoder_step,
-                                             rules)['loss']
+                                             rules)
+                outputs['loss'] = mle_outputs['loss']
+                outputs['batch_scores'] = mle_outputs['batch_scores']
 
             # Now remove unk rules from the grammar state for better code gen.
             # initial_state.grammar_state = [self._create_grammar_state_no_unks(a) for a in actions]
@@ -320,10 +324,14 @@ class JavaSemanticParser(Model):
             outputs['rules'] = []
 
             for i in range(batch_size):
+                # todo(rajas) try removing this if statement
                 if i in best_final_states:
                     em = 0
                     partial_parse_acc = 0
                     bleu = 0
+                    log_prob_pred = 0
+                    log_prob_target = 0
+
                     pred_rules = self._get_rules_from_action_history(best_final_states[i][0].action_history[0], actions[i])
                     if rules is not None:
                         # todo(rajas): average action history function could
@@ -336,7 +344,13 @@ class JavaSemanticParser(Model):
                         targ_code = metadata[i]['code']
 
                         bleu = self._get_bleu(targ_code, pred_code)
-                        self._log_predictions(metadata[i], pred_code, i)
+                        log_prob_target = outputs['batch_scores'][i]
+                        log_prob_pred = best_final_states[i][0].score[0].data.cpu().numpy().tolist()[0]
+                        self._log_predictions(metadata[i], pred_code, batch=i,
+                                              bleu=bleu,
+                                              log_prob_target=log_prob_target,
+                                              log_prob_pred=log_prob_pred
+                                              )
                         if pred_code == targ_code:
                             em = 1
 
@@ -344,6 +358,8 @@ class JavaSemanticParser(Model):
                     # self._partial_production_rule_accuracy(partial_parse_acc)
                     self._code_bleu(bleu)
                     self._exact_match_accuracy(em)
+                    self._avg_targ_log_probs(log_prob_target)
+                    self._avg_pred_log_probs(log_prob_pred)
                     outputs['rules'].append(best_final_states[i][0].grammar_state[0]._action_history)
 
                     outputs['best_action_sequence'].append(pred_rules)
@@ -352,6 +368,7 @@ class JavaSemanticParser(Model):
                     # print('best final states', best_final_states[i][0].debug_info)
 
                     outputs['debug_info'].append(best_final_states[i][0].debug_info[0])  # type: ignore
+                    # outputs['beam_loss'].append(best_final_states[i][0].score)  # type: ignore
                     outputs['entities'].append(entities[i])
 
             return outputs
@@ -494,18 +511,22 @@ class JavaSemanticParser(Model):
                 indent += 1
         return pretty.strip('\n')
 
-    def _log_predictions(self, metadata, pred_code, batch):
+    def _log_predictions(self, metadata, pred_code, batch, bleu, log_prob_target, log_prob_pred):
         # codef.write("batch, " + str(batch) + '\n')
 
         if getattr(self, '_on_extra', None) is not None:
             datasetname = 'valid' if not self._on_extra else 'extra'
             em_correct = open(os.path.join(self._serialization_dir, 'epoch%d-%s-em_correct.txt' %(self._epoch_num, datasetname)), 'a')
             em_incorrect = open(os.path.join(self._serialization_dir, 'epoch%d-%s-em_incorrect.txt' %(self._epoch_num, datasetname)), 'a')
-            codef = open(os.path.join(self._serialization_dir, 'epoch%d-%s-all-preds.txt' %(self._epoch_num, datasetname)), 'a')
+            # codef = open(os.path.join(self._serialization_dir, 'epoch%d-%s-all-preds.txt' %(self._epoch_num, datasetname)), 'a')
+            high_bleu = open(os.path.join(self._serialization_dir, 'epoch%d-%s-bleu-high.txt' %(self._epoch_num, datasetname)), 'a')
+            all_json = open(os.path.join(self._serialization_dir, 'epoch%d-%s-all.json' %(self._epoch_num, datasetname)), 'a')
         else:
             em_correct = open('debug/em_correct.txt', 'a')
             em_incorrect = open('debug/em_incorrect.txt', 'a')
-            codef = open('debug/pred_target_code.txt', 'a')
+            all_json = open('debug/all.json', 'a')
+            high_bleu = open('debug/bleu-high.txt', 'a')
+            # codef = open('debug/pred_target_code.txt', 'a')
 
         log = '==============' * 4 + '\n'
         log += metadata['path'] + '\n'
@@ -525,14 +546,27 @@ class JavaSemanticParser(Model):
         log += self.indent(pred_code) + '\n'
         print(log)
 
-        codef.write(log)
+
+        # todo(rajas) add bleu, and pred to metadat, write out hte json on a line
+        metadata['pred_code'] = pred_code
+        metadata['bleu'] = bleu
+        metadata['pred_prob'] = log_prob_pred
+        metadata['targ_prob'] = log_prob_target
+        all_json.write(json.dumps(metadata)+'\n')
+
+        # codef.write(log)
         if metadata['code'] == pred_code:
             em_correct.write(log)
         else:
             em_incorrect.write(log)
+        if bleu > .3:
+            high_bleu.write(log)
+
         em_correct.close()
         em_incorrect.close()
-        codef.close()
+        high_bleu.close()
+        all_json.close()
+        # codef.close()
 
     def combine_name_types(self, names, types):
         combine_str = ""
@@ -544,6 +578,8 @@ class JavaSemanticParser(Model):
         return {
             'bleu': self._code_bleu.get_metric(reset),
             'em': self._exact_match_accuracy.get_metric(reset),
+            'targ_probs': self._avg_targ_log_probs.get_metric(reset),
+            'pred_probs': self._avg_pred_log_probs.get_metric(reset),
             # 'partial_acc': self._partial_production_rule_accuracy.get_metric(reset)
 
         }

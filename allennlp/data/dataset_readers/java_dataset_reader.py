@@ -19,6 +19,7 @@ from allennlp.data.tokenizers import Token, Tokenizer, WordTokenizer
 
 # from java_programmer.fields import JavaProductionRuleField, JavaGlobalProductionRuleField, ProductionRuleField
 from allennlp.semparse import KnowledgeGraph
+from nltk.corpus import stopwords
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 IdentifierNT = 'IdentifierNT'
@@ -29,6 +30,7 @@ LITERALS_TO_TRIM = [IdentifierNT+IDENTIFIER_TYPES[0], IdentifierNT+IDENTIFIER_TY
 UNK = '<UNK>'
 DUMMY = '<DUMMY>'
 PLAIN_IDENTIFIER_RULE = "<SOME_NAME>-->" + "<SOME_NAME>"
+STOPS = set(stopwords.words("english"))
 
 @DatasetReader.register("java")
 class JavaDatasetReader(DatasetReader):
@@ -95,6 +97,7 @@ class JavaDatasetReader(DatasetReader):
 
         logger.info("Reading file at %s", file_path)
         with open(file_path) as dataset_file:
+            # dataset = json.load(dataset_file)
             p2methods = json.load(dataset_file)
 
         dataset = []
@@ -105,6 +108,7 @@ class JavaDatasetReader(DatasetReader):
                     break
         # if self._num_dataset_instances != -1:
         #     dataset = dataset[:self._num_dataset_instances]
+        # print("Dataset lenght", len(dataset))
 
         modified_rules = self.split_identifier_rule_into_multiple(
             [d['rules'] for d in dataset]
@@ -265,7 +269,7 @@ class JavaDatasetReader(DatasetReader):
 
     @overrides
     def text_to_instance(self,  # type: ignore
-                         utterance: List[str],
+                         utterance_tokens: List[str],
                          variable_names: List[str],
                          variable_types: List[str],
                          method_names: List[str],
@@ -296,22 +300,27 @@ class JavaDatasetReader(DatasetReader):
         # toks = ['<CURR>'] + utterance[:10]
         # toks += ['<PROTOTYPE>'] + proto_tokens[:10]
         # toks = self.split_camel_case(methodName) + ['<SEP>'] + utterance[:25]
-        toks = utterance[:25]
-        utterance_tokens = [Token(t.lower()) for t in toks]
-        utterance_field = TextField(utterance_tokens, self._utterance_indexers)
+        utterance_tokens = [t for t in utterance_tokens if t not in STOPS]
+        utterance_tokens = utterance_tokens[:20]
+        utterance_tokens = [t.lower() for t in utterance_tokens]
+        utterance_tokens_type = [Token(t) for t in utterance_tokens]
+        utterance_field = TextField(utterance_tokens_type,
+                                    self._utterance_indexers)
 
 
-        # proto_toks = self.split_camel_case(protoMethodName) +['<SEP>'] + proto_tokens[:25]
-        proto_toks = proto_tokens[:25]
-        proto_utterance_tokens = [Token(t.lower()) for t in proto_toks]
-        proto_utterance_field = TextField(proto_utterance_tokens, self._utterance_indexers)
+        # proto_ = self.split_camel_case(protoMethodName) +['<SEP>'] + proto_tokens[:25]
+        proto_tokens = [t for t in proto_tokens if t not in STOPS]
+        proto_tokens = proto_tokens[:20]
+        proto_tokens = [t.lower() for t in proto_tokens]
+        proto_utterance_field = TextField([Token(t) for t in proto_tokens],
+                                          self._utterance_indexers)
 
-        metadata_dict = {'utterance':  toks,
-                         'prototype_utterance': proto_toks,
-                         'variableNames':  variable_names,
-                         'variableTypes':  variable_types,
-                         'methodNames':  method_names,
-                         'methodTypes':  method_types,
+        metadata_dict = {'utterance':  utterance_tokens,
+                         'prototype_utterance': proto_tokens,
+                         # 'variableNames':  variable_names,
+                         # 'variableTypes':  variable_types,
+                         # 'methodNames':  method_names,
+                         # 'methodTypes':  method_types,
                          'prototype_methodName': protoMethodName,
                          'methodName': methodName,
                          'path': path}
@@ -342,7 +351,7 @@ class JavaDatasetReader(DatasetReader):
         # and variables when the utterance has word 'is' and variable is 'isParsed'.
         # however if utterance has 'parsed' then it should be linked with 'isParsed'.
         java_class_field = KnowledgeGraphField(knowledge_graph=knowledge_graph,
-                                               utterance_tokens=utterance_tokens,
+                                               utterance_tokens=utterance_tokens_type,
                                                token_indexers=self._environment_token_indexers,
                                                entity_tokens=entity_tokens,
                                                feature_extractors=self._linking_feature_extractors)

@@ -4,7 +4,7 @@ from typing import Dict, List
 from allennlp.common import Params
 from allennlp.nn.decoding.decoder_step import DecoderStep
 from allennlp.nn.decoding.decoder_state import DecoderState
-
+import math
 
 class BeamSearch:
     """
@@ -45,6 +45,9 @@ class BeamSearch:
         best_states : ``Dict[int, List[DecoderState]]``
             This is a mapping from batch index to the top states for that instance.
         """
+
+        # self._beam_size = 10
+
         finished_states: Dict[int, List[DecoderState]] = defaultdict(list)
         states = [initial_state]
         step_num = 1
@@ -72,7 +75,16 @@ class BeamSearch:
         for batch_index, batch_states in finished_states.items():
             # The time this sort takes is pretty negligible, no particular need to optimize this
             # yet.  Maybe with a larger beam size...
+            # print('YAYAY')
+            # print([len(state.action_history[0]) for state in batch_states])
+            # print([((
+            #                         math.log(math.pow(math.exp(.05),
+            #                                           len(state.action_history[0]))))) for state in batch_states])
+            # finished_to_sort = [(-(state.score[0].data[0] +
+            #                         math.log(math.pow(math.exp(1),
+            #                                           len(state.action_history[0])))), state) for state in batch_states]
             finished_to_sort = [(-state.score[0].data[0], state) for state in batch_states]
+            # finished_to_sort = [(-state.score[0].data[0]/len(state.action_history[0]), state) for state in batch_states]
             finished_to_sort.sort(key=lambda x: x[0])
             best_states[batch_index] = [state[1] for state in finished_to_sort[:self._beam_size]]
         return best_states

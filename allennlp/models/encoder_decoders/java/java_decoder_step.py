@@ -155,10 +155,12 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
                 # attended_question = attended_proto_rules
 
-        # To predict an action, we'll use a concatenation of the hidden state and attention over
-        # the question.  We'll just predict an _embedding_, which we will compare to embedded
-        # representations of all valid actions to get a final output.
-        action_query = torch.cat([hidden_state, attended_proto_rules], dim=-1)
+            # To predict an action, we'll use a concatenation of the hidden state and attention over
+            # the question.  We'll just predict an _embedding_, which we will compare to embedded
+            # representations of all valid actions to get a final output.
+            action_query = torch.cat([hidden_state, attended_proto_rules], dim=-1)
+        else:
+            action_query = torch.cat([hidden_state, attended_question], dim=-1)
 
         # (group_size, action_embedding_dim)
         predicted_action_embedding = self._dropout(self._output_projection_layer(action_query))
@@ -279,12 +281,13 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
         log_probs = scores_so_far + current_log_probs
 
-        attended_question = attended_proto_rules
+        if self._should_copy_proto_actions:
+            attended_question = attended_proto_rules
 
-        # if not self._should_copy_proto_actions:
-        #     proto_attention_weights = None
-        #     proto_action_probs = None
-        #     proto_action_probs_mask = None
+        if not self._should_copy_proto_actions:
+            proto_attention_weights = None
+            proto_action_probs = None
+            proto_action_probs_mask = None
 
         if allowed_actions is not None:
             # This method is slow but integrates well with beam search, so use it

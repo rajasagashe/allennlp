@@ -72,7 +72,10 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
         loss = 0
         for score in batch_scores.values():  # we don't care about the batch index, just the scores
             loss += -score[0]
-        return {'loss': loss / len(finished_states)}
+
+        for b in batch_scores.keys():
+            batch_scores[b] = batch_scores[b][0].data.cpu().numpy().tolist()[0]
+        return {'loss': loss / len(finished_states), 'batch_scores': batch_scores}
 
     @staticmethod
     def _get_allowed_actions(state: DecoderState, step_num: int, batch_rules):
