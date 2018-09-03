@@ -97,17 +97,16 @@ class JavaDatasetReader(DatasetReader):
 
         logger.info("Reading file at %s", file_path)
         with open(file_path) as dataset_file:
-            # dataset = json.load(dataset_file)
-            p2methods = json.load(dataset_file)
+            dataset = json.load(dataset_file)
+            # p2methods = json.load(dataset_file)
 
-        dataset = []
-        for _, methods in p2methods.items():
-            dataset += methods
-            if self._num_dataset_instances != -1:
-                if len(dataset) > self._num_dataset_instances:
-                    break
-        # if self._num_dataset_instances != -1:
-        #     dataset = dataset[:self._num_dataset_instances]
+        # for _, methods in p2methods.items():
+        #     dataset += methods
+        #     if self._num_dataset_instances != -1:
+        #         if len(dataset) > self._num_dataset_instances:
+        #             break
+        if self._num_dataset_instances != -1:
+            dataset = dataset[:self._num_dataset_instances]
         # print("Dataset lenght", len(dataset))
 
         modified_rules = self.split_identifier_rule_into_multiple(
