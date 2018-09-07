@@ -61,13 +61,15 @@ class JavaSemanticParser(Model):
                  num_linking_features: int = 8,
                  rule_namespace: str = 'rule_labels',
                  attention_function: SimilarityFunction = None,
-                 should_copy_proto_actions: bool = True) -> None:
+                 should_copy_proto_actions: bool = True,
+                 seq2seq_baseline: bool = False) -> None:
         super(JavaSemanticParser, self).__init__(vocab)
         self._utterance_embedder = utterance_embedder
         # self._embed_terminals = True
         # self._nonterminal_embedder = nonterminal_embedder
         # self._terminal_embedder = nonterminal_embedder
         self._should_copy_proto_actions = should_copy_proto_actions
+        self._seq2seq_baseline = seq2seq_baseline
         self._max_decoding_steps = max_decoding_steps
         self._decoder_beam_search = decoder_beam_search
 
@@ -118,7 +120,8 @@ class JavaSemanticParser(Model):
                                              action_embedding_dim=action_embedding_dim,
                                              attention_function=attention_function,
                                              dropout=dropout,
-                                             should_copy_proto_actions=should_copy_proto_actions)
+                                             should_copy_proto_actions=should_copy_proto_actions,
+                                             seq2seq_baseline=seq2seq_baseline)
 
         em_correct = open('debug/em_correct.txt', 'w+')
         em_incorrect = open('debug/em_incorrect.txt', 'w+')
@@ -735,6 +738,7 @@ class JavaSemanticParser(Model):
         dropout = params.pop_float('dropout', 0.0)
         num_linking_features = params.pop_int('num_linking_features', 8)
         should_copy_proto_actions = params.pop_bool('should_copy_proto_actions', True)
+        is_seq2seq_baseline = params.pop_bool('is_seq2seq_baseline', True)
         decoder_beam_search = BeamSearch.from_params(params.pop("decoder_beam_search"))
         mixture_feedforward_type = params.pop('mixture_feedforward', None)
         if mixture_feedforward_type is not None:
@@ -776,4 +780,5 @@ class JavaSemanticParser(Model):
                    decoder_beam_search=decoder_beam_search,
                    num_linking_features=num_linking_features,
                    dropout=dropout,
-                   should_copy_proto_actions=should_copy_proto_actions)
+                   should_copy_proto_actions=should_copy_proto_actions,
+                   seq2seq_baseline=is_seq2seq_baseline)

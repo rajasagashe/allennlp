@@ -41,12 +41,15 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                  mixture_feedforward: FeedForward = None,
                  prototype_feedforward: FeedForward = None,
                  dropout: float = 0.0,
-                 should_copy_proto_actions: bool = True) -> None:
+                 should_copy_proto_actions: bool = True,
+                 seq2seq_baseline: bool = False) -> None:
         super(JavaDecoderStep, self).__init__()
         self._action_embedder = action_embedder
         self._mixture_feedforward = mixture_feedforward
         self._prototype_feedforward = prototype_feedforward
         self._should_copy_proto_actions = should_copy_proto_actions
+        self._seq2seq_baseline = seq2seq_baseline
+
         self._input_attention = Attention(attention_function)
 
         self._identifier_literal_action_embedding = torch.nn.Parameter(torch.FloatTensor(action_embedding_dim))
@@ -160,7 +163,17 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             # representations of all valid actions to get a final output.
             action_query = torch.cat([hidden_state, attended_proto_rules], dim=-1)
         else:
-            action_query = torch.cat([hidden_state, attended_question], dim=-1)
+            # todo(rajas): temporarily here to test a seq2seq baseline
+            # which uses the prototype code as input and attends on the
+            # target utterance for linking scores
+            if self._seq2seq_baseline:
+                attended_proto_rules, proto_attention_weights = self.attend_on_question(hidden_state,
+                                                                                    proto_rules_encoder_outputs,
+                                                                                    proto_rules_encoder_output_mask.float())
+
+                action_query = torch.cat([hidden_state, attended_proto_rules], dim=-1)
+            else:
+                action_query = torch.cat([hidden_state, attended_question], dim=-1)
 
         # (group_size, action_embedding_dim)
         predicted_action_embedding = self._dropout(self._output_projection_layer(action_query))
@@ -281,7 +294,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
         log_probs = scores_so_far + current_log_probs
 
-        if self._should_copy_proto_actions:
+        # todo(rajas): add back in
+        if self._should_copy_proto_actions or self._seq2seq_baseline:
             attended_question = attended_proto_rules
 
         if not self._should_copy_proto_actions:

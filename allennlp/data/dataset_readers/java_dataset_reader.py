@@ -314,7 +314,7 @@ class JavaDatasetReader(DatasetReader):
         proto_tokens = proto_tokens[:20]
         proto_tokens = [t.lower() for t in proto_tokens]
         proto_utterance_field = TextField([Token(t) for t in proto_tokens],
-                                          self.jj)
+                                          self._utterance_indexers)
 
         metadata_dict = {'utterance':  utterance_tokens,
                          'prototype_utterance': proto_tokens,
