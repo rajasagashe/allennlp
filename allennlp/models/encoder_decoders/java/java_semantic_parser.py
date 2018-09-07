@@ -535,10 +535,12 @@ class JavaSemanticParser(Model):
         # log += 'Methods:\n'
         # log += self.combine_name_types(metadata['methodNames'], metadata['methodTypes'])
         log += 'Prototype========\n'
+        log += metadata['prototype_path'] + '\n'
         log += 'NL:' + ' '.join(metadata['prototype_utterance']) + '\n'
         log += 'methodName:' + (metadata['prototype_methodName']) + '\n'
         log += self.indent(metadata['prototype_code']) + '\n'
         log += 'Target========\n'
+        log += metadata['path'] + '\n'
         log += 'NL:' + ' '.join(metadata['utterance']) + '\n'
         log += 'methodName:' + (metadata['methodName']) + '\n'
         log += self.indent(metadata['code']) + '\n'

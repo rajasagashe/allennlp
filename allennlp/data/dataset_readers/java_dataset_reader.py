@@ -145,7 +145,8 @@ class JavaDatasetReader(DatasetReader):
                                              protoMethodName=record['prototype_methodName'],
                                              methodName=record['methodName'],
                                              code=record['code'],
-                                             path=record['path'])
+                                             path=record['path'],
+                                             prototype_path=record['prototype_path'])
             yield instance
 
     def get_types_used_frequently_even_if_not_in_class(self, rules, dataset):
@@ -283,7 +284,8 @@ class JavaDatasetReader(DatasetReader):
                          proto_og_rules:List[str] = None,
                          protoMethodName: str = None,
                          methodName: str = None,
-                         path: str = None
+                         path: str = None,
+                         prototype_path: str = None
                          ) -> Instance:
         fields = {}
 
@@ -312,7 +314,7 @@ class JavaDatasetReader(DatasetReader):
         proto_tokens = proto_tokens[:20]
         proto_tokens = [t.lower() for t in proto_tokens]
         proto_utterance_field = TextField([Token(t) for t in proto_tokens],
-                                          self._utterance_indexers)
+                                          self.jj)
 
         metadata_dict = {'utterance':  utterance_tokens,
                          'prototype_utterance': proto_tokens,
@@ -322,7 +324,8 @@ class JavaDatasetReader(DatasetReader):
                          # 'methodTypes':  method_types,
                          'prototype_methodName': protoMethodName,
                          'methodName': methodName,
-                         'path': path}
+                         'path': path,
+                         'prototype_path': prototype_path}
         if code is not None:
             metadata_dict['code'] = code
             metadata_dict['prototype_code'] = proto_code
