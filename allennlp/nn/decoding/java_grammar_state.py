@@ -3,15 +3,17 @@ from typing import List, Dict, Tuple
 
 from allennlp.data.fields.production_rule_field import ProductionRuleArray
 # from java_programmer.fields.java_production_rule_field import ProductionRuleArray
+START_SYMBOL = "MemberDeclaration"
 IdentifierNT = 'IdentifierNT'
 class JavaGrammarState:
     def __init__(self,
-                 nonterminal_stack: List[str],
-                 valid_actions: Dict[str, List[int]],
-                 action_history: List[str] = None) -> None:
-        self._nonterminal_stack = nonterminal_stack
-        self._valid_actions = valid_actions
-        self._action_history = action_history or []
+                 nonterminals: Dict[str, str],
+                 nonterminal_stack: List[str] = None,
+                 # action_history: List[str] = None
+                 ) -> None:
+        self._nonterminal_stack = [START_SYMBOL] if nonterminal_stack is None else nonterminal_stack
+        self._nonterminals = nonterminals
+        # self._action_history = action_history or []
         # self._action_indices = action_indices
 
 
@@ -29,14 +31,15 @@ class JavaGrammarState:
         lhs, rhs = production_rule.split('-->')
         if IdentifierNT not in lhs:
             rhs_elements = rhs.split('___')
-            return sum((element in self._valid_actions.keys()) for element in rhs_elements)
+            return sum((element in self._nonterminals) for element in rhs_elements)
         return 0
 
-    def get_valid_actions(self) -> List[int]:
+    def get_current_nonterminal(self) -> List[int]:
         """
         Returns a list of valid actions as integers.
         """
-        return self._valid_actions[self._nonterminal_stack[-1]]
+        # return self._nonterminals[self._nonterminal_stack[-1]]
+        return self._nonterminal_stack[-1]
 
     def take_action(self, rule: str) -> 'GrammarState':
         left_side, right_side = rule.split('-->')
@@ -47,8 +50,8 @@ class JavaGrammarState:
         new_stack = deepcopy(self._nonterminal_stack)
         new_stack.pop()
 
-        new_action_history = deepcopy(self._action_history)
-        new_action_history.append(rule)
+        # new_action_history = deepcopy(self._action_history)
+        # new_action_history.append(rule)
 
         right_side_list = right_side.split('___')
         right_side_list.reverse()
@@ -57,18 +60,12 @@ class JavaGrammarState:
             # For example the production rule IdentifierNT-->Expression is in
             # the dataset. Thus, when the lhs is IdentifierNT, we don't push
             # the rhs on, and this is ok since the rhs is always a terminal.
-            new_stack = new_stack + right_side_list
 
-        # now consume the terminals added to the stack
-        nonterminals = self._valid_actions.keys()
-        for i in range(len(new_stack)):
-            if new_stack[-1] not in nonterminals:
-                # Its a terminal
-                new_stack.pop()
-            else:
-                break
+            # Add only the nonterminals to the stack.
+            new_stack += [s for s in right_side_list if s in self._nonterminals]
 
         return JavaGrammarState(nonterminal_stack=new_stack,
-                                valid_actions=self._valid_actions,
-                                action_history=new_action_history)
+                                nonterminals=self._nonterminals,
+                                # action_history=new_action_history
+                                )
 

@@ -2,6 +2,7 @@ from collections import defaultdict, Counter
 from typing import Dict, List
 import logging
 import json
+import os
 
 import re
 import numpy as np
@@ -26,11 +27,15 @@ IdentifierNT = 'IdentifierNT'
 IdentifierOther = IdentifierNT + 'Other'
 # LITERALS_TO_TRIM = [IdentifierNT, "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
 IDENTIFIER_TYPES = ['Primary', 'ClassOrInterfaceType', 'Nt_33']
-LITERALS_TO_TRIM = [IdentifierNT+IDENTIFIER_TYPES[0], IdentifierNT+IDENTIFIER_TYPES[1], IdentifierNT+IDENTIFIER_TYPES[2], IdentifierOther, "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
+
+# todo(pr): Literals to trim shouoldn't have the modified identifier types or
+# at least should have an if else allowing the modified vs normal IdentifierNT to be selected
+LITERALS_TO_TRIM = [IdentifierNT, IdentifierNT+IDENTIFIER_TYPES[0], IdentifierNT+IDENTIFIER_TYPES[1], IdentifierNT+IDENTIFIER_TYPES[2], IdentifierOther, "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
 UNK = '<UNK>'
 DUMMY = '<DUMMY>'
 PLAIN_IDENTIFIER_RULE = "<SOME_NAME>-->" + "<SOME_NAME>"
 STOPS = set(stopwords.words("english"))
+RULES_FILE = os.path.join('debug/', 'grammar_rules.txt')
 
 @DatasetReader.register("java")
 class JavaDatasetReader(DatasetReader):
@@ -53,42 +58,8 @@ class JavaDatasetReader(DatasetReader):
         self._tokenizer = tokenizer or WordTokenizer()
         self._linking_feature_extractors = linking_feature_extractors
 
-    # class ASTNode:
-    #     def __init__(self, children, rule, desc):
-    #         self.children = children
-    #         self.rule = rule
-    #         self.desc = desc
-    #     def __str__(self):
-    #         return self.rule
-    # def is_nonterminal(self, nt):
-    #     return nt[0].isupper()
-    # def _is_terminal_rule(self, rule):
-    #     lhs, rhs = rule.split('-->')
-    #     return (
-    #            "IdentifierNT" in lhs) \
-    #            or re.match(r"^Nt_.*_literal-->.*", rule) \
-    #            or rule == "<unk>"
-    # def gen_ast(self, rules, i):
-    #     curr = self.ASTNode([], rules[i], "")
-    #     lhs, rhs = rules[i].split('-->')
-    #     rhs_tokens = rhs.split('___')
-    #     if self._is_terminal_rule(rules[i]):
-    #         curr.desc += rhs
-    #     else:
-    #         for nt in rhs_tokens:
-    #             if self.is_nonterminal(nt):
-    #                 child, i = self.gen_ast(rules, i+1)
-    #                 curr.children.append(child)
-    #                 curr.desc += child.desc
-    #             else:
-    #                 curr.desc += nt
-    #     return curr, i
-    # def printMethodCaller(self, curr):
-    #     lhs, rhs = curr.rule.split('-->')
-    #     if rhs == 'Expression___.___Nt_33':
-    #         print(curr.children[0].desc, curr.children[1].desc)
-    #     for c in curr.children:
-    #         self.printMethodCaller(c)
+        # We first delete the file since it could've been created by another job.
+        os.remove(RULES_FILE)
 
     @overrides
     def _read(self, file_path: str):
@@ -109,15 +80,44 @@ class JavaDatasetReader(DatasetReader):
             dataset = dataset[:self._num_dataset_instances]
         # print("Dataset lenght", len(dataset))
 
-        modified_rules = self.split_identifier_rule_into_multiple(
-            [d['rules'] for d in dataset]
-        )
+        # modified_rules = self.split_identifier_rule_into_multiple(
+        #     [d['rules'] for d in dataset]
+        # )
+        # todo(pr): add previous line back
+        modified_rules = [d['rules'] for d in dataset]
 
         og_prototype_rules = [d['prototype_rules'] for d in dataset]
         prototype_rules = self.split_identifier_rule_into_multiple(
             [d['prototype_rules'] for d in dataset]
         )
-        global_production_rule_fields, global_rule2index = self.get_global_rule_fields(modified_rules)
+
+        nonterminal2rules = self.trim_grammar_identifiers_literals(modified_rules)
+
+        # Let's write these out for the semantic parser
+        # with open(os.path.join(self._serialization_dir, 'grammar_rules.txt'), 'w+') as file:
+
+        # todo(pr): remove this if statement!!!
+        if (os.path.basename(file_path).startswith('train')
+            or os.path.basename(file_path).startswith('valid')
+            or os.path.basename(file_path).startswith('extra')):
+            # Don't write the validation out since it won't have all the rules.
+            # print('=====================================')
+            # print(file_path)
+
+            if os.path.exists(RULES_FILE):
+                with open(RULES_FILE, 'r') as file:
+                    prevnt2rules = json.load(file)
+            else:
+                prevnt2rules = defaultdict(list)
+
+            merged = self.merge_dicts(nonterminal2rules, prevnt2rules)
+            with open(RULES_FILE, 'w+') as file:
+                json.dump(merged, file, indent=4)
+
+        # print('--------------------------')
+        # print(nonterminal2rules['Nt_68'])
+
+        global_production_rule_fields, global_rule2index = self.get_global_rule_fields(nonterminal2rules)
 
         for rules in prototype_rules:
             for i,rule in enumerate(rules):
@@ -135,6 +135,7 @@ class JavaDatasetReader(DatasetReader):
                                              record['methodReturns'],
                                              global_production_rule_fields,
                                              global_rule2index,
+                                             nonterminal2actions=nonterminal2rules,
 
                                              # Pass the modified identifier rules.
                                              rules=modified_rules[i],
@@ -148,6 +149,59 @@ class JavaDatasetReader(DatasetReader):
                                              path=record['path'],
                                              prototype_path=record['prototype_path'])
             yield instance
+
+    @staticmethod
+    def merge_dicts(dict1, dict2):
+        merged = {}
+        for nt in (set(dict1.keys()).union(set(dict2.keys()))):
+            rules1 = set(dict1[nt] if nt in dict1 else [])
+            rules2 = set(dict2[nt] if nt in dict2 else [])
+            merged[nt] = list(rules1.union(rules2))
+        return merged
+
+    def trim_grammar_identifiers_literals(self, rules_list):
+        # This is used remove identifier and literal rules, if they occur below
+        # a self._min_identifier_count. This is needed since the action_indexer
+        # indexes the entire rule, so instead of having it map the entire rule
+        # to an unk we want the rule to become Identifier-->UNK
+
+        # First get counts of all rules.
+        nonterminal2rulecounts = defaultdict(Counter)
+        for rules in rules_list:
+            for rule in rules:
+                lhs, _ = self.split_rule(rule)
+                if not (IdentifierNT in lhs and 'srini' in rule):
+                    # Avoid identifiers which expand to class specific names. Nt_string_literal
+                    # also has srini in rhs but we allow it since it always expands to srini_string.
+                    # todo(pr): add a test case since this was blocking nt_string_literal when only
+                    # srini in rule was being checked.
+                    lhs, _ = self.split_rule(rule)
+                    nonterminal2rulecounts[lhs][rule] += 1
+
+        nonterminal2rules = defaultdict(list)
+        for nt in nonterminal2rulecounts:
+            # We only trim from a predefined set of identifiers and literals. This
+            # means that some literals aren't trimmed, but that's because the
+            # expand to a small set of terminals so it's not necessary.
+            if nt in LITERALS_TO_TRIM:
+                for rule, count in nonterminal2rulecounts[nt].items():
+                    if count >= self._min_identifier_count:
+                        nonterminal2rules[nt].append(rule)
+            else:
+                for rule, _ in nonterminal2rulecounts[nt].items():
+                    nonterminal2rules[nt].append(rule)
+
+        # Now add the unk rules for each literal
+        for nt in LITERALS_TO_TRIM:
+            # if nt in nonterminal2rules:
+            # We could check first whether any trimming occurred, but this
+            # is guaranteed to happen so we add unk by default.
+            nonterminal2rules[nt].append(nt + '-->' + UNK)
+            # A DUMMY action is added for when UNK's are removed during test time
+            # to prevent the number of embedded actions from being 0.
+            # nonterminal2rules[nt].append(DUMMY)
+
+        return nonterminal2rules
 
     def get_types_used_frequently_even_if_not_in_class(self, rules, dataset):
         type_in_class_count = 0
@@ -177,23 +231,7 @@ class JavaDatasetReader(DatasetReader):
         # print(sum([count for t, count in type2count.most_common(50)]))
         return [t for t, _ in type2count.most_common(50)]
 
-    def experiment_nt33(self, rules, dataset):
-        type_in_class_count = 0
-        num_types = 0
-        type2count = Counter()
-        for i, d in enumerate(dataset):
-            enviro_types = d['varTypes'] + d['methodReturns']
-            for rule in rules[i]:
-                lhs, rhs = rule.split('-->')
-                if lhs == 'IdentifierNTNt_33':
-                    print('-----------'*5)
-                    for rule in rules[i]:
-                        print(rule)
-                    print(' '.join(d['code']))
-                    print(lhs, rhs)
 
-
-        exit()
 
 
     def split_identifier_rule_into_multiple(self, rules_lst):
@@ -224,9 +262,9 @@ class JavaDatasetReader(DatasetReader):
 
         return new_rules
 
-    def get_global_rule_fields(self, rules):
+    def get_global_rule_fields(self, nonterminal2rules):
+        # todo(pr): i think this can be removed after changes
         # Prepare global production rules to be used in JavaGrammarState.
-        lhs2all_rhs = self.trim_grammar_identifiers_literals(rules)
 
         # Converts all the rules into ProductionRuleFields and returns a dictionary
         # from the rule to its index in the ListField of ProductionRuleFields.
@@ -239,9 +277,10 @@ class JavaDatasetReader(DatasetReader):
         # index = 1
         production_rule_fields = []
         index = 0
-        for lhs, all_rhs in lhs2all_rhs.items():
-            for rhs in all_rhs:
-                rule = lhs + '-->' + rhs
+        for lhs, rules in nonterminal2rules.items():
+            for rule in rules:
+                # rule = lhs + '-->' + rhs
+                _, rhs = rule.split('-->')
                 if 'sriniclass' in rule or 'srinifunc' in rule:
                     # Names from environment shouldn't be added to global rules.
                     continue
@@ -276,6 +315,7 @@ class JavaDatasetReader(DatasetReader):
                          method_types: List[str],
                          global_rule_fields: List[ProductionRuleField],
                          globalrule2index: Dict[str, int],
+                         nonterminal2actions: Dict[str, List[str]],
                          code: str = None,
                          rules: List[str] = None,
                          proto_rules: List[str] = None,
@@ -361,67 +401,67 @@ class JavaDatasetReader(DatasetReader):
         environment_rules, environmentrule2index = self.get_java_class_specific_rules(knowledge_graph, entity2isType)
 
         if rules is not None:
-            target_rule_field = self.get_target_rule_field(rules, globalrule2index, environmentrule2index)
-            fields['rules'] = target_rule_field
+            # target_rule_field = self.get_target_rule_field(rules, globalrule2index, environmentrule2index)
+            # fields['rules'] = target_rule_field
+            trimmed_rules = self.remove_infrequent_rules(rules, nonterminal2actions)
+            fields['rules'] = MetadataField(trimmed_rules)
 
-        if proto_rules is not None:
-            # todo(rajas) just make this a production rule field
-            proto_rule_field = self.get_target_rule_field(proto_rules, globalrule2index, environmentrule2index)
-            fields['prototype_rules'] = proto_rule_field
+        # if proto_rules is not None:
+        #     # todo(rajas) just make this a production rule field
+        #     proto_rule_field = self.get_target_rule_field(proto_rules, globalrule2index, environmentrule2index)
+        #     fields['prototype_rules'] = proto_rule_field
 
         entity_field = MetadataField(knowledge_graph.entities)
 
         fields.update({"utterance": utterance_field,
-                       "prototype_utterance": proto_utterance_field,
+                       # "prototype_utterance": proto_utterance_field,
                        # "variable_names": variable_name_fields,
                        # "variable_types": variable_types_field,
                        # "method_names": method_name_fields,
                        # "method_return_types": method_return_types_field,
-                       "actions": ListField(global_rule_fields + environment_rules),
+                       # "actions": ListField(global_rule_fields + environment_rules),
                        "java_class": java_class_field,
                        "entities": entity_field })
 
         return Instance(fields)
 
-
-
-    def trim_grammar_identifiers_literals(self, rules_list):
-        # This is used remove identifier and literal rules, if they occur below
-        # a self._min_identifier_count. This is needed since the action_indexer
-        # indexes the entire rule, so instead of having it map the entire rule
-        # to an unk we want the rule to become Identifier-->UNK
-
-        # First get all unique rhsides and their counts.
-        lhs2rhscounts = defaultdict(Counter)
-        for rules in rules_list:
-            for rule in rules:
-                lhs, rhs = rule.split('-->')
-                lhs2rhscounts[lhs][rhs] += 1
-
-        lhs2trimmedrhs = defaultdict(list)
-        for lhs in lhs2rhscounts:
-            # We only trim from a predefined set of identifiers and literals. This
-            # means that some literals aren't trimmed, but that's because the
-            # expand to a small set of terminals so it's not necessary.
-            if lhs in LITERALS_TO_TRIM:
-                for rhs, count in lhs2rhscounts[lhs].items():
-                    if count >= self._min_identifier_count:
-                        lhs2trimmedrhs[lhs].append(rhs)
-            else:
-                for rhs, _ in lhs2rhscounts[lhs].items():
-                    lhs2trimmedrhs[lhs].append(rhs)
-
-        # Now add the unk rules for each literal
-        for nt in LITERALS_TO_TRIM:
-            # if nt in lhs2trimmedrhs:
-            # We could check first whether any trimming occurred, but this
-            # is guaranteed to happen so we add unk by default.
-            lhs2trimmedrhs[nt].append(UNK)
-            # A DUMMY action is added for when UNK's are removed during test time
-            # to prevent the number of embedded actions from being 0.
-            # lhs2trimmedrhs[nt].append(DUMMY)
-
-        return lhs2trimmedrhs
+    # def trim_grammar_identifiers_literals(self, rules_list):
+    #     # This is used remove identifier and literal rules, if they occur below
+    #     # a self._min_identifier_count. This is needed since the action_indexer
+    #     # indexes the entire rule, so instead of having it map the entire rule
+    #     # to an unk we want the rule to become Identifier-->UNK
+    #
+    #     # First get all unique rhsides and their counts.
+    #     lhs2rhscounts = defaultdict(Counter)
+    #     for rules in rules_list:
+    #         for rule in rules:
+    #             lhs, rhs = rule.split('-->')
+    #             lhs2rhscounts[lhs][rhs] += 1
+    #
+    #     lhs2trimmedrhs = defaultdict(list)
+    #     for lhs in lhs2rhscounts:
+    #         # We only trim from a predefined set of identifiers and literals. This
+    #         # means that some literals aren't trimmed, but that's because the
+    #         # expand to a small set of terminals so it's not necessary.
+    #         if lhs in LITERALS_TO_TRIM:
+    #             for rhs, count in lhs2rhscounts[lhs].items():
+    #                 if count >= self._min_identifier_count:
+    #                     lhs2trimmedrhs[lhs].append(rhs)
+    #         else:
+    #             for rhs, _ in lhs2rhscounts[lhs].items():
+    #                 lhs2trimmedrhs[lhs].append(rhs)
+    #
+    #     # Now add the unk rules for each literal
+    #     for nt in LITERALS_TO_TRIM:
+    #         # if nt in lhs2trimmedrhs:
+    #         # We could check first whether any trimming occurred, but this
+    #         # is guaranteed to happen so we add unk by default.
+    #         lhs2trimmedrhs[nt].append(UNK)
+    #         # A DUMMY action is added for when UNK's are removed during test time
+    #         # to prevent the number of embedded actions from being 0.
+    #         # lhs2trimmedrhs[nt].append(DUMMY)
+    #
+    #     return lhs2trimmedrhs
 
 
     def get_java_class_knowledge_graph(self,
@@ -529,25 +569,41 @@ class JavaDatasetReader(DatasetReader):
                 index += 1
         return java_class_rules, javaclassrule2index
 
-    def get_target_rule_field(self, rules, globalrule2index, environmentrule2index):
-        rule_indexes = []
+    @staticmethod
+    def remove_infrequent_rules(rules, nonterminal2actions):
+        new_rules = []
         for rule in rules:
-            # It's important that the envirorule if statement comes first. In the case
-            # that there is rule for the type from the environment, we want to encourage
-            # the parser to copy from the environment.
-            if rule in environmentrule2index:
-                # Environment rule indexes come after last global index since the
-                # environment rules are appended to the global rules list.
-                rule_indexes.append(len(globalrule2index) + environmentrule2index[rule])
-            elif rule in globalrule2index:
-                rule_indexes.append(globalrule2index[rule])
+            lhs, _ = JavaDatasetReader.split_rule(rule)
+            if rule not in nonterminal2actions[lhs]:
+                new_rules.append(JavaDatasetReader.create_unk_rule(lhs))
             else:
-                lhs, _ = rule.split('-->')
-                rule_indexes.append(globalrule2index[lhs + '-->' + UNK])
-
-        # todo(rajas) convert to an index field
-        rule_field = ArrayField(np.array(rule_indexes), padding_value=-1)
-        return rule_field
+                new_rules.append(rule)
+        return new_rules
+    # def get_target_rule_field(self, rules, globalrule2index, environmentrule2index):
+    #     rule_indexes = []
+    #     for rule in rules:
+    #         # It's important that the envirorule if statement comes first. In the case
+    #         # that there is rule for the type from the environment, we want to encourage
+    #         # the parser to copy from the environment.
+    #         if rule in environmentrule2index:
+    #             # Environment rule indexes come after last global index since the
+    #             # environment rules are appended to the global rules list.
+    #             rule_indexes.append(len(globalrule2index) + environmentrule2index[rule])
+    #         elif rule in globalrule2index:
+    #             rule_indexes.append(globalrule2index[rule])
+    #         else:
+    #             lhs, _ = rule.split('-->')
+    #             rule_indexes.append(globalrule2index[lhs + '-->' + UNK])
+    #
+    #     # todo(rajas) convert to an index field
+    #     rule_field = ArrayField(np.array(rule_indexes), padding_value=-1)
+    #     return rule_field
+    @staticmethod
+    def split_rule(rule):
+        return rule.split('-->')
+    @staticmethod
+    def create_unk_rule(nt):
+        return nt + '-->' + UNK
 
     def get_field_from_method_variable_names(self, words: List[str]) -> ListField:
         # For each variable or method name, this method splits it
