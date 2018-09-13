@@ -391,9 +391,9 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             # score for the current action.
             log_probs = state.score[group_index] + current_log_probs
             batch_results[state.batch_indices[group_index]] = (group_index,
-                                                                    log_probs,
-                                                                    action_embeddings,
-                                                                    actions[group_index])
+                                                                log_probs,
+                                                                action_embeddings,
+                                                                actions[group_index])
         return batch_results
 
     @timeit
@@ -425,7 +425,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         attended_question = [x.squeeze(0) for x in updated_rnn_state['attended_question'].chunk(group_size, 0)]
         end = time.time()
         debug_print('Time to squeeze and chunk', (end-start)*1000)
-        # @timeit
+#         # @timeit
         def make_state(group_index: int,
                        action: str,
                        new_score: torch.Tensor,
@@ -512,18 +512,49 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 #     exit()
             else:
                 group_index, log_probs, action_embeddings, actions = results
-                log_probs_cpu = log_probs.data.cpu().numpy().tolist()
+                start1 = time.time()
+                log_probs_cpu_list = log_probs.data.cpu().numpy().tolist()
                 batch_states = []
+
                 for log_prob, action_embedding, action in zip(log_probs, action_embeddings, actions):
-                    batch_states.append((log_probs_cpu, group_index, log_prob, action_embedding, action))
+                    batch_states.append((log_probs_cpu_list, group_index, log_prob, action_embedding, action))
+                end1 = time.time()
 
 
                 # We use a key here to make sure we're not trying to compare anything on the GPU.
+                start2 = time.time()
                 batch_states.sort(key=lambda x: x[0], reverse=True)
+                end2 = time.time()
+
+                print('Num Actions', len(actions))
+
+                # efficient code
+                if len(actions) > max_actions:
+                    # todo(pr): rename logprobscpunp
+                    batch_states = []
+                    start3 = time.time()
+                    log_probs_cpu_np = log_probs.data.cpu().numpy()
+                    top_indices = np.argpartition(log_probs_cpu_np, -max_actions)[-max_actions:]
+
+                    # actually sort the indices
+                    sorted_top_indices = top_indices[np.argsort(log_probs_cpu_np[top_indices])]
+                    for top_index in sorted_top_indices.tolist():
+                        batch_states.append((log_probs_cpu_np[top_index], group_index, log_probs[top_index],
+                                            action_embeddings[top_index], actions[top_index]))
+                    end3 = time.time()
+
+
                 if max_actions:
                     batch_states = batch_states[:max_actions]
+                start4 = time.time()
                 for _, group_index, log_prob, action_embedding, action in batch_states:
                     new_states.append(make_state(group_index, action, log_prob, action_embedding))
+                end4 = time.time()
+                print('time zip', (end1-start1)*1000)
+                print('time sort', (end2-start2)*1000)
+                if len(actions) > max_actions:
+                    print('time zs optimized', (end3-start3)*1000)
+                print('time make state', (end4-start4)*1000)
 
         return new_states
 
