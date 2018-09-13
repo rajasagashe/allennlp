@@ -59,7 +59,8 @@ class JavaDatasetReader(DatasetReader):
         self._linking_feature_extractors = linking_feature_extractors
 
         # We first delete the file since it could've been created by another job.
-        os.remove(RULES_FILE)
+        # read_rules_from_file
+        # os.remove(RULES_FILE)
 
     @overrides
     def _read(self, file_path: str):
@@ -76,9 +77,15 @@ class JavaDatasetReader(DatasetReader):
         #     if self._num_dataset_instances != -1:
         #         if len(dataset) > self._num_dataset_instances:
         #             break
+
+        # todo(pr) remove this one:
+        # if os.path.basename(file_path).startswith('train'):
+        #     dataset = dataset[:300]
+        # elif os.path.basename(file_path).startswith('valid'):
+        #     dataset = dataset[:30000]
+
         if self._num_dataset_instances != -1:
             dataset = dataset[:self._num_dataset_instances]
-        # print("Dataset lenght", len(dataset))
 
         # modified_rules = self.split_identifier_rule_into_multiple(
         #     [d['rules'] for d in dataset]
@@ -91,19 +98,14 @@ class JavaDatasetReader(DatasetReader):
             [d['prototype_rules'] for d in dataset]
         )
 
-        nonterminal2rules = self.trim_grammar_identifiers_literals(modified_rules)
 
-        # Let's write these out for the semantic parser
-        # with open(os.path.join(self._serialization_dir, 'grammar_rules.txt'), 'w+') as file:
-
-        # todo(pr): remove this if statement!!!
-        if (os.path.basename(file_path).startswith('train')
-            or os.path.basename(file_path).startswith('valid')
-            or os.path.basename(file_path).startswith('extra')):
-            # Don't write the validation out since it won't have all the rules.
-            # print('=====================================')
-            # print(file_path)
-
+        read_rules_from_file = True
+        if read_rules_from_file:
+            with open(RULES_FILE, 'r') as file:
+                nonterminal2rules = json.load(file)
+        else:
+            # todo(pr): need to add read rules to delete file
+            nonterminal2rules = self.trim_grammar_identifiers_literals(modified_rules)
             if os.path.exists(RULES_FILE):
                 with open(RULES_FILE, 'r') as file:
                     prevnt2rules = json.load(file)
@@ -114,8 +116,6 @@ class JavaDatasetReader(DatasetReader):
             with open(RULES_FILE, 'w+') as file:
                 json.dump(merged, file, indent=4)
 
-        # print('--------------------------')
-        # print(nonterminal2rules['Nt_68'])
 
         global_production_rule_fields, global_rule2index = self.get_global_rule_fields(nonterminal2rules)
 

@@ -152,9 +152,9 @@ class JavaSemanticParser(Model):
 
         self._action_embedder = Embedding(num_embeddings=num_actions,
                                           embedding_dim=self._action_embedding_dim)
-        self._action_embedder.cuda()
+        if torch.cuda.is_available():
+            self._action_embedder.cuda()
         self._nonterminal2action_embeddings = {}
-        print('action embedder weight', self._action_embedder.weight)
         for nt, (start, end) in nonterminal2range.items():
             self._nonterminal2action_embeddings[nt] = self._action_embedder.weight[start:end, :]
 
@@ -239,7 +239,7 @@ class JavaSemanticParser(Model):
         #                                                      True)
         memory_cell = Variable(encoder_outputs.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
 
-        initial_score = Variable(embedded_utterance.data.new(batch_size).fill_(0))
+        initial_score = Variable(embedded_utterance.data.new(batch_size,1).fill_(0))
 
         # (batch_size, num_entities, num_question_tokens, num_features)
         # linking_features = java_class['linking']
@@ -347,7 +347,8 @@ class JavaSemanticParser(Model):
             best_final_states = self._decoder_beam_search.search(num_steps,
                                                                  initial_state,
                                                                  self._decoder_step,
-                                                                 keep_final_unfinished_states=False)
+                                                                 keep_final_unfinished_states=True)
+            # todo(pr): ok to set keep final unfinished states to True????
 
             outputs['best_action_sequence'] = []
             outputs['debug_info'] = []
@@ -363,49 +364,51 @@ class JavaSemanticParser(Model):
 
             for i in range(batch_size):
                 # todo(rajas) try removing this if statement
-                if i in best_final_states:
-                    em = 0
-                    bleu = 0
-                    log_prob_pred = 0
-                    log_prob_target = 0
 
-                    # print('pred rules', pred_rules)
-                    pred_rules = best_final_states[i][0].action_history[0]
-                    if rules is not None:
-                        pred_code = self._gen_code_from_rules(pred_rules)
-                        targ_code = metadata[i]['code']
+                # if i in best_final_states:
 
-                        bleu = self._get_bleu(targ_code, pred_code)
-                        log_prob_target = outputs['batch_scores'][i]
-                        log_prob_pred = best_final_states[i][0].score[0].data.cpu().numpy().tolist()[0]
-                        self._log_predictions(metadata[i], pred_code, batch=i,
-                                              bleu=bleu,
-                                              log_prob_target=log_prob_target,
-                                              log_prob_pred=log_prob_pred
-                                              )
-                        if pred_code == targ_code:
-                            em = 1
+                em = 0
+                bleu = 0
+                log_prob_pred = 0
+                log_prob_target = 0
+
+                # print('pred rules', pred_rules)
+                pred_rules = best_final_states[i][0].action_history[0]
+                if rules is not None:
+                    pred_code = self._gen_code_from_rules(pred_rules)
+                    targ_code = metadata[i]['code']
+
+                    bleu = self._get_bleu(targ_code, pred_code)
+                    log_prob_target = outputs['batch_scores'][i]
+                    log_prob_pred = best_final_states[i][0].score[0].data.cpu().numpy().tolist()[0]
+                    self._log_predictions(metadata[i], pred_code, batch=i,
+                                          bleu=bleu,
+                                          log_prob_target=log_prob_target,
+                                          log_prob_pred=log_prob_pred
+                                          )
+                    if pred_code == targ_code:
+                        em = 1
 
 
-                    # self._partial_production_rule_accuracy(partial_parse_acc)
-                    self._code_bleu(bleu)
-                    self._exact_match_accuracy(em)
-                    # print('***************************************')
-                    # print('i', i)
-                    # print('best final states', best_final_states.keys())
-                    # print('targ log probs', log_prob_target)
-                    # print('batch scores', outputs['batch_scores'])
-                    # print(best_final_states[i][0].grammar_states)
-                    self._avg_targ_log_probs(log_prob_target)
-                    self._avg_pred_log_probs(log_prob_pred)
-                    outputs['rules'].append(best_final_states[i][0].action_history)
+                # self._partial_production_rule_accuracy(partial_parse_acc)
+                self._code_bleu(bleu)
+                self._exact_match_accuracy(em)
+                # print('***************************************')
+                # print('i', i)
+                # print('best final states', best_final_states.keys())
+                # print('targ log probs', log_prob_target)
+                # print('batch scores', outputs['batch_scores'])
+                # print(best_final_states[i][0].grammar_states)
+                self._avg_targ_log_probs(log_prob_target)
+                self._avg_pred_log_probs(log_prob_pred)
+                outputs['rules'].append(best_final_states[i][0].action_history)
 
-                    outputs['best_action_sequence'].append(pred_rules)
-                    outputs['logical_form'].append(self.indent(self._gen_code_from_rules(pred_rules)))
-                    # print('best final states', best_final_states[i][0])
-                    # print('best final states', best_final_states[i][0].debug_info)
+                outputs['best_action_sequence'].append(pred_rules)
+                outputs['logical_form'].append(self.indent(self._gen_code_from_rules(pred_rules)))
+                # print('best final states', best_final_states[i][0])
+                # print('best final states', best_final_states[i][0].debug_info)
 
-                    outputs['debug_info'].append(best_final_states[i][0].debug_info[0])  # type: ignore
+                outputs['debug_info'].append(best_final_states[i][0].debug_info[0])  # type: ignore
                     # outputs['beam_loss'].append(best_final_states[i][0].score)  # type: ignore
                     # outputs['entities'].append(entities[i])
 
@@ -559,13 +562,12 @@ class JavaSemanticParser(Model):
             # codef = open(os.path.join(self._serialization_dir, 'epoch%d-%s-all-preds.txt' %(self._epoch_num, datasetname)), 'a')
             high_bleu = open(os.path.join(self._serialization_dir, 'epoch%d-%s-bleu-high.txt' %(self._epoch_num, datasetname)), 'a')
             all_json = open(os.path.join(self._serialization_dir, 'epoch%d-%s-all.json' %(self._epoch_num, datasetname)), 'a')
-        # else:
-            # em_correct = open('debug/em_correct.txt', 'a')
-            # em_incorrect = open('debug/em_incorrect.txt', 'a')
-            # all_json = open('debug/all.json', 'a')
-            # high_bleu = open('debug/bleu-high.txt', 'a')
-
-            # codef = open('debug/pred_target_code.txt', 'a')
+        else:
+            em_correct = open('debug/em_correct.txt', 'a')
+            em_incorrect = open('debug/em_incorrect.txt', 'a')
+            all_json = open('debug/all.json', 'a')
+            high_bleu = open('debug/bleu-high.txt', 'a')
+            codef = open('debug/pred_target_code.txt', 'a')
 
         log = '==============' * 4 + '\n'
         log += metadata['path'] + '\n'
@@ -588,12 +590,12 @@ class JavaSemanticParser(Model):
         print(log)
 
 
-        # todo(rajas) add bleu, and pred to metadat, write out hte json on a line
-        metadata['pred_code'] = pred_code
-        metadata['bleu'] = bleu
-        metadata['pred_prob'] = log_prob_pred
-        metadata['targ_prob'] = log_prob_target
-        all_json.write(json.dumps(metadata)+'\n')
+        pred_dict = {}
+        pred_dict['pred_code'] = pred_code
+        pred_dict['bleu'] = bleu
+        pred_dict['pred_prob'] = log_prob_pred
+        pred_dict['targ_prob'] = log_prob_target
+        all_json.write(json.dumps({**metadata, **pred_dict}, indent=4)+'\n')
 
         # codef.write(log)
         if metadata['code'] == pred_code:

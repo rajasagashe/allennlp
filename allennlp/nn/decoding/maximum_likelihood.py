@@ -11,6 +11,8 @@ from allennlp.nn.decoding.decoder_state import DecoderState
 from allennlp.nn.decoding.decoder_trainer import DecoderTrainer
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+from allennlp.common.util import timeit, debug_print
+
 
 
 class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
@@ -57,17 +59,19 @@ class MaximumLikelihood(DecoderTrainer[Tuple[torch.Tensor, torch.Tensor]]):
             #     exit()
             batch_scores[b] = batch_scores[b][0].data.cpu().numpy().tolist()[0]
 
-        if len(batch_scores) != len(batch_actions):
-            print('lens')
-            print(len(batch_scores), len(batch_actions))
+            # batch_scores[b] = batch_scores[b][0].data.cpu().numpy().tolist()
 
-            for state in finished_states:
-                print('finished', state.batch_indices, state.grammar_states[0]._nonterminal_stack)
-            for i in range(len(batch_actions)):
-                if i not in batch_scores:
-                    print('Batch index not complete', i)
+        # if len(batch_scores) != len(batch_actions):
+        #     print('lens')
+        #     print(len(batch_scores), len(batch_actions))
 
-            exit()
+            # for state in finished_states:
+            #     print('finished', state.batch_indices, state.grammar_states[0]._nonterminal_stack)
+            # for i in range(len(batch_actions)):
+            #     if i not in batch_scores:
+            #         print('Batch index not complete', i)
+
+            # exit()
         # print('batch scores', batch_scores)
         return {'loss': loss / len(finished_states), 'batch_scores': batch_scores}
 
