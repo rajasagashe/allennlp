@@ -277,10 +277,13 @@ class JavaOutput extends React.Component {
                   </Collapsible>
                 ))}
               </Collapsible>
-              <Collapsible trigger="Entity linking scores">
-                  <HeatMap xLabels={question_tokens} yLabels={entities} data={linking_scores} xLabelWidth="250px" />
-              </Collapsible>
-              {/*{feature_scores &&*/}
+
+              {/*<Collapsible trigger="Entity linking scores">*/}
+                  {/*<HeatMap xLabels={question_tokens} yLabels={entities} data={linking_scores} xLabelWidth="250px" />*/}
+              {/*</Collapsible>*/}
+
+
+            {/*{feature_scores &&*/}
                 {/*<Collapsible trigger="Entity linking scores (features only)">*/}
                     {/*<HeatMap xLabels={question_tokens} yLabels={entities} data={feature_scores} xLabelWidth="250px" />*/}
                 {/*</Collapsible>*/}
@@ -309,11 +312,12 @@ class ActionInfo extends React.Component {
     const prototype_action_score = action['prototype_action_probs'].map(x => [x]);
 
     console.log("ActionInfo");
-      console.log(action_probs);
-      console.log(prototype_action_score);
+      // console.log(action_probs);
+      // console.log(prototype_action_score);
 
-      console.log(considered_actions);
-      console.log(considered_prototype_actions);
+      // console.log(considered_actions);
+
+      // console.log(considered_prototype_actions);
       // console.log(action_string);
     // console.log(question_attention);
     // console.log(considered_actions);
@@ -321,18 +325,18 @@ class ActionInfo extends React.Component {
 
     return (
       <div>
-        <div className="heatmap">
-          <HeatMap xLabels={['Prob']} yLabels={considered_prototype_actions} data={prototype_action_score} xLabelWidth="250px" />
-        </div>
+        {/*<div className="heatmap">*/}
+          {/*<HeatMap xLabels={['Prob']} yLabels={considered_prototype_actions} data={prototype_action_score} xLabelWidth="250px" />*/}
+        {/*</div>*/}
 
 
         <div className="heatmap">
           <HeatMap xLabels={['Prob']} yLabels={considered_actions} data={action_probs} xLabelWidth="250px" />
         </div>
 
-        <div className="heatmap">
-          <HeatMap xLabels={['Prob']} yLabels={prototype_rules} data={prototype_attention} xLabelWidth="70px" />
-        </div>
+        {/*<div className="heatmap">*/}
+          {/*<HeatMap xLabels={['Prob']} yLabels={prototype_rules} data={prototype_attention} xLabelWidth="70px" />*/}
+        {/*</div>*/}
 
         <div className="heatmap">
           <HeatMap xLabels={['Prob']} yLabels={question_tokens} data={question_attention} xLabelWidth="70px" />
@@ -390,8 +394,11 @@ class _JavaComponent extends React.Component {
           pathname: newPath,
           state: { requestData: payload, responseData: json }
         }
+        // console.log('json', json);
         this.props.history.push(location);
       }).catch((error) => {
+          // console.log("payload", payload);
+
         this.setState({outputState: "error"});
         console.error(error);
       });
@@ -411,8 +418,34 @@ class _JavaComponent extends React.Component {
       const entities = responseData && responseData.entities;
       const question_tokens = responseData && responseData.question_tokens;
       const prototype_rules = responseData && responseData.prototype_rules;
-      // console.log()
-      console.log("");
+
+      console.log("table ", table );
+      console.log("question ", question );
+      console.log("answer ", answer );
+      console.log("logicalForm ", logicalForm );
+      console.log("actions ", actions );
+      console.log("linking_scores ", linking_scores );
+      console.log("feature_scores ", feature_scores );
+      console.log("similarity_scores ", similarity_scores );
+      console.log("entities ", entities );
+      console.log("question_tokens ", question_tokens );
+      console.log("prototype_rules ", prototype_rules );
+
+
+
+
+
+
+
+
+
+
+
+
+      // console.log("table ", tabl
+        // ", prototype_rules );
+
+
 
       return (
         <div className="pane model">

@@ -258,104 +258,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         attended_question = util.weighted_sum(encoder_outputs, question_attention_weights)
         return attended_question, question_attention_weights
 
-    # def _get_entity_action_logits(self,
-    #                               state: JavaDecoderState,
-    #                               actions_to_link: List[List[int]],
-    #                               attention_weights: torch.Tensor) -> Tuple[torch.FloatTensor,
-    #                                                                         torch.LongTensor,
-    #                                                                         torch.FloatTensor]:
-    #     """
-    #     Returns scores for each action in ``actions_to_link`` that are derived from the linking
-    #     scores between the question and the table entities, and the current attention on the
-    #     question.  The intuition is that if we're paying attention to a particular word in the
-    #     question, we should tend to select entity productions that we think that word refers to.
-    #     We additionally return a mask representing which elements in the returned ``action_logits``
-    #     tensor are just padding, and an embedded representation of each action that can be used as
-    #     input to the next step of the encoder.  That embedded representation is derived from the
-    #     type of the entity produced by the action.
-    #
-    #     The ``actions_to_link`` are in terms of the `batch` action list passed to
-    #     ``model.forward()``.  We need to convert these integers into indices into the linking score
-    #     tensor, which has shape (batch_size, num_entities, num_question_tokens), look up the
-    #     linking score for each entity, then aggregate the scores using the current question
-    #     attention.
-    #
-    #     Parameters
-    #     ----------
-    #     state : ``JavaDecoderState``
-    #         The current state.  We'll use this to get the linking scores.
-    #     actions_to_link : ``List[List[int]]``
-    #         A list of _batch_ action indices for each group element.  Should have shape
-    #         (group_size, num_actions), unpadded.  This is expected to be output from
-    #         :func:`_get_actions_to_consider`.
-    #     attention_weights : ``torch.Tensor``
-    #         The current attention weights over the question tokens.  Should have shape
-    #         ``(group_size, num_question_tokens)``.
-    #
-    #     Returns
-    #     -------
-    #     action_logits : ``torch.FloatTensor``
-    #         A score for each of the given actions.  Shape is ``(group_size, num_actions)``, where
-    #         ``num_actions`` is the maximum number of considered actions for any group element.
-    #     action_mask : ``torch.LongTensor``
-    #         A mask of shape ``(group_size, num_actions)`` indicating which ``(group_index,
-    #         action_index)`` pairs were merely added as padding.
-    #     type_embeddings : ``torch.LongTensor``
-    #         A tensor of shape ``(group_size, num_actions, action_embedding_dim)``, with an embedded
-    #         representation of the `type` of the entity corresponding to each action.
-    #     """
-    #     # First we map the actions to entity indices, using state.actions_to_entities, and find the
-    #     # type of each entity using state.entity_types.
-    #     action_entities: List[List[int]] = []
-    #     entity_types: List[List[int]] = []
-    #     for batch_index, action_list in zip(state.batch_indices, actions_to_link):
-    #         action_entities.append([])
-    #         entity_types.append([])
-    #         for action_index in action_list:
-    #             entity_index = state.actions_to_entities[(batch_index, action_index)]
-    #             action_entities[-1].append(entity_index)
-    #             # All entities will have the same type here. In the java paper all the previous
-    #             # action embeddings for rules identifier/literal are denoted by one special rule
-    #             # "IdentifierOrLiteral" to collapse the large number of rules into 1.
-    #             entity_types[-1].append(0)  # state.entity_types[entity_index])
-    #
-    #     # Then we create a padded tensor suitable for use with
-    #     # `state.flattened_linking_scores.index_select()`.
-    #     num_actions = [len(action_list) for action_list in action_entities]
-    #     max_num_actions = max(num_actions)
-    #     padded_actions = [common_util.pad_sequence_to_length(action_list, max_num_actions)
-    #                       for action_list in action_entities]
-    #     # padded_types = [common_util.pad_sequence_to_length(type_list, max_num_actions)
-    #     #                 for type_list in entity_types]
-    #     # Shape: (group_size, num_actions)
-    #     action_tensor = Variable(state.score[0].data.new(padded_actions).long())
-    #     # type_tensor = Variable(state.score[0].data.new(padded_types).long())
-    #
-    #     # To get the type embedding tensor, we just use an embedding matrix on the list of entity
-    #     # types.
-    #     # type_embeddings = self._entity_type_embedding(type_tensor)
-    #
-    #     # `state.flattened_linking_scores` is shape (batch_size * num_entities, num_question_tokens).
-    #     # We want to select from this using `action_tensor` to get a tensor of shape (group_size,
-    #     # num_actions, num_question_tokens).  Unfortunately, the index_select functions in nn.util
-    #     # don't do this operation.  So we'll do some reshapes and do the index_select ourselves.
-    #     group_size = len(state.batch_indices)
-    #     num_question_tokens = state.flattened_linking_scores.size(-1)
-    #     flattened_actions = action_tensor.view(-1)
-    #     # (group_size * num_actions, num_question_tokens)
-    #     flattened_action_linking = state.flattened_linking_scores.index_select(0, flattened_actions)
-    #     # (group_size, num_actions, num_question_tokens)
-    #     action_linking = flattened_action_linking.view(group_size, max_num_actions, num_question_tokens)
-    #
-    #     # Now we get action logits by weighting these entity x token scores by the attention over
-    #     # the question tokens.  We can do this efficiently with torch.bmm.
-    #     action_logits = action_linking.bmm(attention_weights.unsqueeze(-1)).squeeze(-1)
-    #
-    #     # Finally, we make a mask for our action logit tensor.
-    #     sequence_lengths = Variable(action_linking.data.new(num_actions))
-    #     action_mask = util.get_mask_from_sequence_lengths(sequence_lengths, max_num_actions)
-    #     return action_logits, action_mask  # , type_embeddings
-
     #@timeit
     def _compute_action_probabilities(self,
                                       state: JavaDecoderState,
@@ -381,8 +283,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
             # This is just a matrix product between a (num_actions, embedding_dim) matrix and an
             # (embedding_dim, 1) matrix.
-            # print('action', action_embeddings)
-            # print('pred', predicted_action_embeddings)
             action_logits = action_embeddings.mm(predicted_action_embedding.unsqueeze(-1))#.squeeze(-1)
             # Shape: (num_actions, 1)
             current_log_probs = torch.nn.functional.log_softmax(action_logits, dim=0)
@@ -418,13 +318,10 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # each time is more expensive than doing it once upfront.  These three lines give about a
         # 10% speedup in training time.
 
-        start = time.time()
         group_size = len(state.batch_indices)
         hidden_state = [x.squeeze(0) for x in updated_rnn_state['hidden_state'].chunk(group_size, 0)]
         memory_cell = [x.squeeze(0) for x in updated_rnn_state['memory_cell'].chunk(group_size, 0)]
         attended_question = [x.squeeze(0) for x in updated_rnn_state['attended_question'].chunk(group_size, 0)]
-        end = time.time()
-        debug_print('Time to squeeze and chunk', (end-start)*1000)
         def make_state(group_index: int,
                        action: str,
                        new_score: torch.Tensor,
@@ -476,82 +373,39 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         for group_index, results in batch_action_probs.items():
             log_probs, action_embeddings, actions = results
             if allowed_actions: # todo(pr); is this ok to comment? and not max_actions:
-                # If we're given a set of allowed actions, and we're not just keeping the top k of
-                # them, we don't need to do any sorting, so we can speed things up quite a bit.
-                # for log_prob, action_embedding, action in zip(log_probs, action_embeddings, actions):
-                #     # print(action)
-                #     if action == allowed_actions[group_index]:
-                #         # print('calling mke state', allowed_actions[group_index])
-                #         action_taken = True
-                #         new_states.append(make_state(group_index, action, log_prob, action_embedding))
                 lhs, _ = allowed_actions[group_index].split('-->')
                 aindex = state.nonterminal2action2index[lhs][allowed_actions[group_index]]
                 new_states.append(make_state(group_index, actions[aindex], log_probs[aindex], action_embeddings[aindex]))
-                # end3 = time.time()
-                # debug_print('Inner for loop', (end3-start3)*1000)
-                # if False:
-                #     print("Something went wrong====================================")
-                #     print('Group', group_index, "bindex", bindex)
-                #     print(state.grammar_states[group_index]._nonterminal_stack)
-                #     print('avail actions', actions)
-                #     print('allowed action', allowed_actions[group_index])
-                #
-                #     # print(state.action_history[group_index])
-                #     # for rule in state.action_history[group_index]:
-                #     #     print(rule)
-                #     exit()
             else:
                 batch_states = []
                 # Shape (num_actions)
                 log_probs = log_probs.squeeze(-1)
                 if len(actions) > max_actions:
                     # efficient code for identifiers
-                    start3 = time.time()
                     log_probs_cpu = log_probs.data.cpu().numpy()
-                    # print('log probs size', log_probs.size())
-                    # print('log probs size', log_probs[0].size())
-                    # print('log procs cpu', log_probs_cpu)
                     top_indices = np.argpartition(log_probs_cpu, -max_actions)[-max_actions:]
 
-                    # print('top indices', top_indices)
-                    # print('top indices index', np.argsort(log_probs_cpu[top_indices]))
                     # actually sort the indices
                     sorted_top_indices = top_indices[np.argsort(log_probs_cpu[top_indices])]
                     # Need descending order.
                     sorted_top_indices = sorted_top_indices[::-1]
 
-                    # print('sorted top indices', sorted_top_indices)
                     for top_index in sorted_top_indices.tolist():
                         batch_states.append((log_probs_cpu[top_index], group_index, log_probs[top_index],
                                             action_embeddings[top_index], actions[top_index]))
-                    end3 = time.time()
                 else:
-                    start1 = time.time()
                     log_probs_cpu = log_probs.data.cpu().numpy().tolist()
                     batch_states = []
 
                     for i in range(len(actions)):
                         batch_states.append((log_probs_cpu[i], group_index, log_probs[i], action_embeddings[i], actions[i]))
-                    end1 = time.time()
 
                     # We use a key here to make sure we're not trying to compare anything on the GPU.
-                    start2 = time.time()
                     batch_states.sort(key=lambda x: x[0], reverse=True)
-                    end2 = time.time()
 
                 if max_actions:
                     batch_states = batch_states[:max_actions]
-                start4 = time.time()
                 for _, group_index, log_prob, action_embedding, action in batch_states:
-                    # print(action)
                     new_states.append(make_state(group_index, action, log_prob, action_embedding))
-                end4 = time.time()
-
-                # print('Num Actions', len(actions))
-                # print('time zip', (end1-start1)*1000)
-                # print('time sort', (end2-start2)*1000)
-                # if len(actions) > max_actions:
-                #     print('time zs optimized', (end3-start3)*1000)
-                # print('time make state', (end4-start4)*1000)
 
         return new_states
