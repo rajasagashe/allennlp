@@ -391,10 +391,9 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             # sort by this later, so it's important that this is the total score, not just the
             # score for the current action.
             log_probs = state.score[group_index] + current_log_probs
-            batch_results[state.batch_indices[group_index]] = (group_index,
-                                                                log_probs,
-                                                                action_embeddings,
-                                                                actions[group_index])
+            batch_results[group_index] = (log_probs,
+                                          action_embeddings,
+                                          actions[group_index])
         return batch_results
 
     #@timeit
@@ -459,11 +458,11 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             considered_actions = None
             probabilities = None
             if state.debug_info is not None:
-                batch_index = state.batch_indices[group_index]
                 # These indices are the locations in the tuple as created in
                 # _compute_action_probabilities
-                considered_actions = batch_action_probs[batch_index][3]
-                probabilities = batch_action_probs[batch_index][1].exp().cpu()
+                considered_actions = batch_action_probs[group_index][2]
+
+                probabilities = batch_action_probs[group_index][0].squeeze(-1).data.exp().cpu().numpy().tolist()
             return state.new_state_from_group_index(group_index,
                                                     action,
                                                     new_score,
@@ -474,29 +473,20 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
 
         new_states = []
 
-        for bindex, results in batch_action_probs.items():
+        for group_index, results in batch_action_probs.items():
+            log_probs, action_embeddings, actions = results
             if allowed_actions: # todo(pr); is this ok to comment? and not max_actions:
-                # action_taken = False
-
                 # If we're given a set of allowed actions, and we're not just keeping the top k of
                 # them, we don't need to do any sorting, so we can speed things up quite a bit.
-                group_index, log_probs, action_embeddings, actions = results
-                # print('in allowed actions', actions)
-                # print('action is', allowed_actions[group_index])
-                start3 = time.time()
-
-
                 # for log_prob, action_embedding, action in zip(log_probs, action_embeddings, actions):
                 #     # print(action)
                 #     if action == allowed_actions[group_index]:
                 #         # print('calling mke state', allowed_actions[group_index])
                 #         action_taken = True
                 #         new_states.append(make_state(group_index, action, log_prob, action_embedding))
-
                 lhs, _ = allowed_actions[group_index].split('-->')
                 aindex = state.nonterminal2action2index[lhs][allowed_actions[group_index]]
                 new_states.append(make_state(group_index, actions[aindex], log_probs[aindex], action_embeddings[aindex]))
-
                 # end3 = time.time()
                 # debug_print('Inner for loop', (end3-start3)*1000)
                 # if False:
@@ -511,8 +501,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                 #     #     print(rule)
                 #     exit()
             else:
-                group_index, log_probs, action_embeddings, actions = results
-
                 batch_states = []
                 # Shape (num_actions)
                 log_probs = log_probs.squeeze(-1)
@@ -529,6 +517,9 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                     # print('top indices index', np.argsort(log_probs_cpu[top_indices]))
                     # actually sort the indices
                     sorted_top_indices = top_indices[np.argsort(log_probs_cpu[top_indices])]
+                    # Need descending order.
+                    sorted_top_indices = sorted_top_indices[::-1]
+
                     # print('sorted top indices', sorted_top_indices)
                     for top_index in sorted_top_indices.tolist():
                         batch_states.append((log_probs_cpu[top_index], group_index, log_probs[top_index],
@@ -552,6 +543,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                     batch_states = batch_states[:max_actions]
                 start4 = time.time()
                 for _, group_index, log_prob, action_embedding, action in batch_states:
+                    # print(action)
                     new_states.append(make_state(group_index, action, log_prob, action_embedding))
                 end4 = time.time()
 
