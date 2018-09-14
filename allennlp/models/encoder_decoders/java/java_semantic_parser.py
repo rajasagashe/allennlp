@@ -8,6 +8,7 @@ import os
 
 import time
 
+import numpy as np
 from allennlp.training.metrics import Average
 from overrides import overrides
 
@@ -138,22 +139,18 @@ class JavaSemanticParser(Model):
             for i, action in enumerate(actions):
                 self._nonterminal2action2index[nt][action] = i
 
-
-        # if 'Nt_string_literal' not in self._nonterminal2actions:
-        #     print('aint in actions')
-        #     exit()
-        # else:
-        #     print(self._nonterminal2actions['Nt_string_literal'])
-
         # todo(pr): split the identifierNT out of action2iindex
-
-        # print(nonterminal2actions['Nt_68'])
-        # exit()
 
         self._action_embedder = Embedding(num_embeddings=num_actions,
                                           embedding_dim=self._action_embedding_dim)
         if torch.cuda.is_available():
-            self._action_embedder.cuda()
+            print('CUDA is available')
+            # todo(pr): uncomment this
+            # self._action_embedder.cuda()
+
+        else:
+            print('HELLO')
+
         self._nonterminal2action_embeddings = {}
         for nt, (start, end) in nonterminal2range.items():
             self._nonterminal2action_embeddings[nt] = self._action_embedder.weight[start:end, :]
@@ -286,18 +283,9 @@ class JavaSemanticParser(Model):
                                               # proto_utt_final_encoder_outputs=proto_utt_final_encoder_output_list
                                               ))
 
-        # todo(pr) each grammar state will have the same valid actions object
-        # initial_grammar_state = [self._create_grammar_state(actions[i])
-        #                          for i in range(batch_size)]
         nonterminals = self._nonterminal2actions.keys()
         initial_grammar_state = [JavaGrammarState(nonterminals=nonterminals)
                                  for i in range(batch_size)]
-
-        # todo(rajas) remove this
-        # action_mapping = {}
-        # for batch_index, batch_actions in enumerate(actions):
-        #     for action_index, action in enumerate(batch_actions):
-        #         action_mapping[(batch_index, action_index)] = action[0]
 
         initial_state = JavaDecoderState(batch_indices=list(range(batch_size)),
                                          action_history=[[] for _ in range(batch_size)],
@@ -347,7 +335,7 @@ class JavaSemanticParser(Model):
             best_final_states = self._decoder_beam_search.search(num_steps,
                                                                  initial_state,
                                                                  self._decoder_step,
-                                                                 keep_final_unfinished_states=True)
+                                                                 keep_final_unfinished_states=False)
             # todo(pr): ok to set keep final unfinished states to True????
 
             outputs['best_action_sequence'] = []
@@ -365,52 +353,52 @@ class JavaSemanticParser(Model):
             for i in range(batch_size):
                 # todo(rajas) try removing this if statement
 
-                # if i in best_final_states:
+                if i in best_final_states:
 
-                em = 0
-                bleu = 0
-                log_prob_pred = 0
-                log_prob_target = 0
+                    em = 0
+                    bleu = 0
+                    log_prob_pred = 0
+                    log_prob_target = 0
 
-                # print('pred rules', pred_rules)
-                pred_rules = best_final_states[i][0].action_history[0]
-                if rules is not None:
-                    pred_code = self._gen_code_from_rules(pred_rules)
-                    targ_code = metadata[i]['code']
+                    # print('pred rules', pred_rules)
+                    pred_rules = best_final_states[i][0].action_history[0]
+                    if rules is not None:
+                        pred_code = self._gen_code_from_rules(pred_rules)
+                        targ_code = metadata[i]['code']
 
-                    bleu = self._get_bleu(targ_code, pred_code)
-                    log_prob_target = outputs['batch_scores'][i]
-                    log_prob_pred = best_final_states[i][0].score[0].data.cpu().numpy().tolist()[0]
-                    self._log_predictions(metadata[i], pred_code, batch=i,
-                                          bleu=bleu,
-                                          log_prob_target=log_prob_target,
-                                          log_prob_pred=log_prob_pred
-                                          )
-                    if pred_code == targ_code:
-                        em = 1
+                        bleu = self._get_bleu(targ_code, pred_code)
+                        log_prob_target = outputs['batch_scores'][i]
+                        log_prob_pred = best_final_states[i][0].score[0].data.cpu().numpy().tolist()[0]
+                        self._log_predictions(metadata[i], pred_code, batch=i,
+                                              bleu=bleu,
+                                              log_prob_target=log_prob_target,
+                                              log_prob_pred=log_prob_pred
+                                              )
+                        if pred_code == targ_code:
+                            em = 1
 
 
-                # self._partial_production_rule_accuracy(partial_parse_acc)
-                self._code_bleu(bleu)
-                self._exact_match_accuracy(em)
-                # print('***************************************')
-                # print('i', i)
-                # print('best final states', best_final_states.keys())
-                # print('targ log probs', log_prob_target)
-                # print('batch scores', outputs['batch_scores'])
-                # print(best_final_states[i][0].grammar_states)
-                self._avg_targ_log_probs(log_prob_target)
-                self._avg_pred_log_probs(log_prob_pred)
-                outputs['rules'].append(best_final_states[i][0].action_history)
+                    # self._partial_production_rule_accuracy(partial_parse_acc)
+                    self._code_bleu(bleu)
+                    self._exact_match_accuracy(em)
+                    # print('***************************************')
+                    # print('i', i)
+                    # print('best final states', best_final_states.keys())
+                    # print('targ log probs', log_prob_target)
+                    # print('batch scores', outputs['batch_scores'])
+                    # print(best_final_states[i][0].grammar_states)
+                    self._avg_targ_log_probs(log_prob_target)
+                    self._avg_pred_log_probs(log_prob_pred)
+                    outputs['rules'].append(best_final_states[i][0].action_history)
 
-                outputs['best_action_sequence'].append(pred_rules)
-                outputs['logical_form'].append(self.indent(self._gen_code_from_rules(pred_rules)))
-                # print('best final states', best_final_states[i][0])
-                # print('best final states', best_final_states[i][0].debug_info)
+                    outputs['best_action_sequence'].append(pred_rules)
+                    outputs['logical_form'].append(self.indent(self._gen_code_from_rules(pred_rules)))
+                    # print('best final states', best_final_states[i][0])
+                    # print('best final states', best_final_states[i][0].debug_info)
 
-                outputs['debug_info'].append(best_final_states[i][0].debug_info[0])  # type: ignore
-                    # outputs['beam_loss'].append(best_final_states[i][0].score)  # type: ignore
-                    # outputs['entities'].append(entities[i])
+                    outputs['debug_info'].append(best_final_states[i][0].debug_info[0])  # type: ignore
+                        # outputs['beam_loss'].append(best_final_states[i][0].score)  # type: ignore
+                        # outputs['entities'].append(entities[i])
 
             return outputs
 
@@ -425,7 +413,7 @@ class JavaSemanticParser(Model):
         This method trims the output predictions to the first end symbol, replaces indices with
         corresponding tokens, and adds a field called ``predicted_tokens`` to the ``output_dict``.
         """
-        action_mapping = output_dict['action_mapping']
+
         best_actions = output_dict["best_action_sequence"]
         debug_infos = output_dict['debug_info']
         batch_action_info = []
@@ -437,34 +425,53 @@ class JavaSemanticParser(Model):
                 considered_actions = action_debug_info['considered_actions']
                 probabilities = action_debug_info['probabilities']
                 actions = []
-                for action, probability in zip(considered_actions, probabilities):
-                    if action != -1:
-                        actions.append((action_mapping[(batch_index, action)], probability))
-                actions.sort()
+
+
+                max_num_actions = len(considered_actions) if len(considered_actions) < 30 else 30
+                probs_np = np.array(probabilities)
+                top_indices = np.argpartition(probs_np, -max_num_actions)[-max_num_actions:]
+                sorted_top_indices = top_indices[np.argsort(probs_np[top_indices])]
+                for index in sorted_top_indices[::-1]:
+                    actions.append((considered_actions[index], probabilities[index]))
+
+                # for action, probability in zip(considered_actions, probabilities):
+                #     print("Action and prob", probability, action)
+                #     actions.append((action, probability))
+                # actions.sort()
+
                 considered_actions, probabilities = zip(*actions)
+
+                # print('considered actions', considered_actions)
 
                 action_info['considered_actions'] = considered_actions
                 action_info['action_probabilities'] = probabilities
 
-                considered_prototype_actions = action_debug_info['considered_prototype_actions']
-                prototype_action_probs = action_debug_info['prototype_action_probs']
-                # print('sem parser decode')
-                # print(considered_prototype_actions)
-                # print(prototype_action_probs)
-                actions = []
-                for action, probability in zip(considered_prototype_actions, prototype_action_probs):
-                    if action != -1:
-                        actions.append((action_mapping[(batch_index, action)], probability))
-                actions.sort()
-                if len(actions) != 0:
-                    considered_prototype_actions, prototype_action_probs = zip(*actions)
-                else:
-                    considered_prototype_actions, prototype_action_probs = [], []
-                action_info['considered_prototype_actions'] = considered_prototype_actions
-                action_info['prototype_action_probs'] = prototype_action_probs
+                # todo(pr): temporarily commented out prototype stuff
+                # considered_prototype_actions = action_debug_info['considered_prototype_actions']
+                # prototype_action_probs = action_debug_info['prototype_action_probs']
+                # # print('sem parser decode')
+                # # print(considered_prototype_actions)
+                # # print(prototype_action_probs)
+                # actions = []
+                # for action, probability in zip(considered_prototype_actions, prototype_action_probs):
+                #         actions.append((action, probability))
+                # actions.sort()
+                # if len(actions) != 0:
+                #     considered_prototype_actions, prototype_action_probs = zip(*actions)
+                # else:
+                #     considered_prototype_actions, prototype_action_probs = [], []
+                # action_info['considered_prototype_actions'] = considered_prototype_actions
+                # action_info['prototype_action_probs'] = prototype_action_probs
+                # action_info['prototype_attention'] = action_debug_info['prototype_attention']
+
+                # todo(pr): hack to get demo to work. remove this
+                action_info['considered_prototype_actions'] = considered_actions
+                action_info['prototype_action_probs'] = probabilities
+                action_info['prototype_attention'] = action_debug_info['question_attention']
+
+
 
                 action_info['question_attention'] = action_debug_info['question_attention']
-                action_info['prototype_attention'] = action_debug_info['prototype_attention']
                 instance_action_info.append(action_info)
             batch_action_info.append(instance_action_info)
         output_dict["predicted_actions"] = batch_action_info

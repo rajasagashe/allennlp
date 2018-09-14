@@ -20,6 +20,8 @@ class JavaParserPredictor(Predictor):
     def __init__(self, model: Model, dataset_reader: DatasetReader) -> None:
         super().__init__(model, dataset_reader)
 
+
+        # todo(pr): change file paths
         file_path = "/home/rajas/semparse/java-programmer/data/added-path-methodname/train-with-edits.json"
         extra_file_path = "/home/rajas/semparse/java-programmer/data/added-path-methodname/extra-fromtrain-with-edits.json"
 
@@ -40,25 +42,27 @@ class JavaParserPredictor(Predictor):
         # modified_rules = dataset_reader.split_identifier_rule_into_multiple([d['rules'] for d in dataset])
         # self.global_production_rule_fields, self.global_rule2index = dataset_reader.get_global_rule_fields(modified_rules)
 
-        with open(file_path) as dataset_file:
-            p2methods = json.load(dataset_file)
-        train_dataset = []
-        for _, methods in p2methods.items():
-            train_dataset += methods
-            if self._dataset_reader._num_dataset_instances != -1:
-                if len(train_dataset) > self._dataset_reader._num_dataset_instances:
-                    break
+        # with open(file_path) as dataset_file:
+        #     p2methods = json.load(dataset_file)
+        # train_dataset = []
+        # for _, methods in p2methods.items():
+        #     train_dataset += methods
+        #     if self._dataset_reader._num_dataset_instances != -1:
+        #         if len(train_dataset) > self._dataset_reader._num_dataset_instances:
+        #             break
+
+
         with open(extra_file_path) as dataset_file:
             p2methods = json.load(dataset_file)
         self.extra_dataset = []
         for _, methods in p2methods.items():
             self.extra_dataset += methods
 
-        modified_rules = self._dataset_reader.split_identifier_rule_into_multiple(
-            [d['rules'] for d in train_dataset]
-        )
+        # modified_rules = self._dataset_reader.split_identifier_rule_into_multiple(
+        #     [d['rules'] for d in train_dataset]
+        # )
 
-        self.global_production_rule_fields, self.global_rule2index = self._dataset_reader.get_global_rule_fields(modified_rules)
+        # self.global_production_rule_fields, self.global_rule2index = self._dataset_reader.get_global_rule_fields(modified_rules)
 
 
 
@@ -88,15 +92,17 @@ class JavaParserPredictor(Predictor):
             if (record['methodName'] == methodName and
                         record['path'] == path):
                 break
-        modified_targ_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['rules']])
+
+        # modified_targ_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['rules']])
         modified_proto_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['prototype_rules']])
 
-        for rules in modified_proto_rules:
-            for i, rule in enumerate(rules):
-                # lhs, rhs = rule.split('-->')
-                # No class field/func identifier rules since these cannot be embedded
-                if rule not in self.global_rule2index:
-                    rules[i] = PLAIN_IDENTIFIER_RULE
+        #
+        # for rules in modified_proto_rules:
+        #     for i, rule in enumerate(rules):
+        #         # lhs, rhs = rule.split('-->')
+        #         # No class field/func identifier rules since these cannot be embedded
+        #         if rule not in self.global_rule2index:
+        #             rules[i] = PLAIN_IDENTIFIER_RULE
 
         if len(lst) > 2:
             proto_nl = lst[2].split()
@@ -104,23 +110,6 @@ class JavaParserPredictor(Predictor):
             record['prototype_nl'] = proto_nl  # ['API', 'level', '8']
             record['nl'] = nl  # ['API', 'level', '9']
 
-            # now fetch record from validation dataset
-            # nl = table_text[0]
-
-            # for row_index, line in enumerate(table_text.split('\n')):
-            #     line = line.rstrip('\n')
-            # if ':' in line:
-            #     class_category = line
-            # else:
-            #     if class_category != ''
-            #     name, type = line.split('(')
-            #     type = type.split(')')[0]
-            #     if class_category == 'Variables:':
-            #         java_class['variable_names'].append(name)
-            #         java_class['variable_types'].append(type)
-            #     else:
-            #         java_class['method_names'].append(name)
-            #         java_class['method_types'].append(type)
 
         print('Natural Language')
         print(record['prototype_nl'])
@@ -130,11 +119,7 @@ class JavaParserPredictor(Predictor):
                                                          record['varTypes'],
                                                          record['methodNames'],
                                                          record['methodReturns'],
-                                                         self.global_production_rule_fields,
-                                                         self.global_rule2index,
 
-                                                         # Pass the modified identifier rules.
-                                                         # rules=modified_targ_rules[0],
                                                          rules=None,
                                                          proto_rules=modified_proto_rules[0],
                                                          proto_tokens=record['prototype_nl'],
