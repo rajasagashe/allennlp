@@ -25,6 +25,8 @@
   "test_data_path": "tests/fixtures/data/java/sample_data_prototypes.json",
 
   "model": {
+    "should_copy_identifiers": false,
+    "use_utterance_embedder_identifiers": true,
     "action_embedding_dim": 50,
     "num_linking_features": 7,
     "dropout": 0.5,
