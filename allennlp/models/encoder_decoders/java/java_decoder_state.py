@@ -16,6 +16,10 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                  nonterminal2actions: Dict[str, List[str]],
                  nonterminal2action_embeddings: Dict[str, torch.Tensor],
                  nonterminal2action2index: Dict[str, torch.Tensor],
+                 should_copy_identifiers: bool,
+                 copy_identifier_embeddings:List[torch.Tensor] = None,
+                 copy_identifier_actions: List[List[str]] = None,
+
                  # flattened_linking_scores: torch.FloatTensor,
                  # actions_to_entities: Dict[Tuple[int, int], int],
 
@@ -29,23 +33,40 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         self.nonterminal2actions = nonterminal2actions
         self.nonterminal2action_embeddings = nonterminal2action_embeddings
         self.nonterminal2action2index = nonterminal2action2index
-
         # self.flattened_linking_scores = flattened_linking_scores
         # self.actions_to_entities = actions_to_entities
+
+        self.should_copy_identifiers = should_copy_identifiers
+        self.copy_identifier_actions = copy_identifier_actions
+        self.copy_identifier_embeddings = copy_identifier_embeddings
+
         self.debug_info = debug_info
         # self.proto_actions = proto_actions
         # self.proto_mask = proto_mask
 
-    def get_valid_actions_embeddings(self) -> Tuple[list, list]:
+    def get_valid_actions_embeddings(self, group_index) -> Tuple[list, list]:
         """
         Returns a list of valid actions for each element of the group
                 a list of embeddings for those valid actions
         """
-        nonterminals = [state.get_current_nonterminal() for state in self.grammar_states]
+        # nonterminals = [state.get_current_nonterminal() for state in self.grammar_states]
+        # actions = [self.nonterminal2actions[nt] for nt in nonterminals]
+        # embeddings = [self.nonterminal2action_embeddings[nt] for nt in nonterminals]
+        # for i in range(self.batch_indices):
+        # return actions, embeddings
 
-        actions = [self.nonterminal2actions[nt] for nt in nonterminals]
-        embeddings = [self.nonterminal2action_embeddings[nt] for nt in nonterminals]
-        return actions, embeddings
+        nt = self.grammar_states[group_index].get_current_nonterminal()
+        actions = self.nonterminal2actions[nt]
+        embeddings = self.nonterminal2action_embeddings[nt]
+        # print('actions', nt, actions[:2])
+        # print('embeddings', embeddings)
+
+        copy_actions = None
+        copy_embeddings = None
+        if self.should_copy_identifiers and nt == 'IdentifierNT':
+            copy_actions = self.copy_identifier_actions[group_index]
+            copy_embeddings = self.copy_identifier_embeddings[group_index]
+        return actions, embeddings, copy_actions, copy_embeddings
 
     # @timeit
     def new_state_from_group_index(self,
@@ -73,25 +94,25 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         else:
             new_debug_info = None
 
+        if self.should_copy_identifiers:
+            new_copy_identifier_actions=[self.copy_identifier_actions[group_index]]
+            new_copy_identifier_embeddings=[self.copy_identifier_embeddings[group_index]]
+        else:
+            new_copy_identifier_actions = None
+            new_copy_identifier_embeddings = None
 
         return JavaDecoderState(batch_indices=[batch_index],
-                                 action_history=[new_action_history],
-                                 score=[new_score],
-                                 rnn_state=[new_rnn_state],
-                                 grammar_states=[new_grammar_state],
+                                action_history=[new_action_history],
+                                score=[new_score],
+                                rnn_state=[new_rnn_state],
+                                grammar_states=[new_grammar_state],
                                 nonterminal2actions=self.nonterminal2actions,
                                 nonterminal2action_embeddings=self.nonterminal2action_embeddings,
                                 nonterminal2action2index=self.nonterminal2action2index,
-                                 debug_info=new_debug_info)
-
-        # return GrammarBasedDecoderState(batch_indices=[batch_index],
-        #                                 action_history=[new_action_history],
-        #                                 score=[new_score],
-        #                                 rnn_state=[new_rnn_state],
-        #                                 grammar_state=[new_grammar_state],
-        #                                 possible_actions=self.possible_actions,
-        #                                 extras=self.extras,
-        #                                 debug_info=new_debug_info)
+                                should_copy_identifiers=self.should_copy_identifiers,
+                                copy_identifier_actions=new_copy_identifier_actions,
+                                copy_identifier_embeddings=new_copy_identifier_embeddings,
+                                debug_info=new_debug_info)
 
     def is_finished(self) -> bool:
         if len(self.batch_indices) != 1:
@@ -105,6 +126,13 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         scores = [score for state in states for score in state.score]
         rnn_state = [rnn_state for state in states for rnn_state in state.rnn_state]
         grammar_states = [grammar_state for state in states for grammar_state in state.grammar_states]
+
+        if states[0].should_copy_identifiers:
+            copy_identifier_actions = [copy_identifier_action for state in states for copy_identifier_action in state.copy_identifier_actions]
+            copy_identifier_embeddings = [copy_identifier_embedding for state in states for copy_identifier_embedding in state.copy_identifier_embeddings]
+        else:
+            copy_identifier_actions = None
+            copy_identifier_embeddings = None
 
         # proto_actions = [proto_actions for state in states for proto_actions in state.proto_actions]
         # proto_actions_mask = [proto_mask for state in states for proto_mask in state.proto_mask]
@@ -124,6 +152,9 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                                 nonterminal2action_embeddings=states[0].nonterminal2action_embeddings,
                                 nonterminal2action2index=states[0].nonterminal2action2index,
                                 grammar_states=grammar_states,
+                                should_copy_identifiers=states[0].should_copy_identifiers,
+                                copy_identifier_actions=copy_identifier_actions,
+                                copy_identifier_embeddings=copy_identifier_embeddings,
                                 # flattened_linking_scores=states[0].flattened_linking_scores,
                                 # actions_to_entities=states[0].actions_to_entities,
                                 # proto_actions=proto_actions,

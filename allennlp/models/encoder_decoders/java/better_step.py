@@ -35,6 +35,7 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                  encoder_output_dim: int,
                  action_embedding_dim: int,
                  attention_function: SimilarityFunction,
+                 should_copy_identifiers: bool,
                  mixture_feedforward: FeedForward = None,
                  prototype_feedforward: FeedForward = None,
                  dropout: float = 0.0,
@@ -66,6 +67,9 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # `action_embedding_dim` to make a prediction.
         self._output_projection_layer = Linear(output_dim + encoder_output_dim, action_embedding_dim)
 
+        # if should_copy_identifiers:
+        #     self._copy_params = Linear(output_dim, 1)
+
         # self.utt_sim_linear = Linear(1, 5)
         # self.hidden_copy_proto_rule_mlp = Linear(encoder_output_dim, 1)
 
@@ -96,6 +100,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # being selected.
         updated_state = self._update_decoder_state(state)
         batch_results = self._compute_action_probabilities(state,
+                                                           updated_state['hidden_state'],
+                                                           updated_state['attended_question'],
                                                            updated_state['predicted_action_embeddings'])
         new_states = self._construct_next_states(state,
                                                  updated_state,
@@ -104,88 +110,6 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
                                                  allowed_actions)
 
         return new_states
-
-        # actions_to_link = False
-        # if actions_to_link:
-        #     # entity_action_logits: (group_size, num_entity_actions)
-        #     # entity_action_mask: (group_size, num_entity_actions)
-        #     entity_action_logits, entity_action_mask = \
-        #         self._get_entity_action_logits(state, actions_to_link, attention_weights)
-        #
-        #     # The `action_embeddings` tensor gets used later as the input to the next decoder step.
-        #     # For linked actions, we don't have any action embedding, so we use the entity type
-        #     # instead.
-        #     # action_embeddings = torch.cat([action_embeddings, entity_type_embeddings], dim=1)
-        #     if self._mixture_feedforward is not None:
-        #         # The entity and action logits are combined with a mixture weight to prevent the
-        #         # entity_action_logits from dominating the embedded_action_logits if a softmax
-        #         # was applied on both together.
-        #         mixture_weight = self._mixture_feedforward(hidden_state)
-        #         mix1 = torch.log(mixture_weight)
-        #         mix2 = torch.log(1 - mixture_weight)
-        #
-        #         entity_action_probs = util.masked_log_softmax(entity_action_logits,
-        #                                                       entity_action_mask.float()) + mix1
-        #         embedded_action_probs = util.masked_log_softmax(embedded_action_logits,
-        #                                                         embedded_action_mask.float()) + mix2
-        #
-        #         if self._should_copy_proto_actions:
-        #             entity_action_probs = entity_action_probs + log_proto_mix1
-        #             embedded_action_probs = embedded_action_probs + log_proto_mix1
-        #
-        #             embedded_action_probs, proto_action_probs = self.combine_embedded_proto_action_probs(
-        #                 embedded_action_probs, proto_action_probs, proto_action_probs_mask.float(), action_indices,
-        #                 proto_mix2)
-        #
-        #         current_log_probs = torch.cat([embedded_action_probs, entity_action_probs], dim=1)
-        #     else:
-        #         action_logits = torch.cat([embedded_action_logits, entity_action_logits], dim=1)
-        #         action_mask = torch.cat([embedded_action_mask, entity_action_mask], dim=1).float()
-        #         current_log_probs = util.masked_log_softmax(action_logits, action_mask)
-        #
-        #
-        # proto_attention_weights = None
-        # proto_action_probs = None
-        # proto_action_probs_mask = None
-        #
-        #
-        #
-        # if allowed_actions is not None:
-        #     return self._construct_next_states(updated_rnn_state=None,
-        #                                        batch_action_probs=batch_results,
-        #                                        max_actions=None,
-        #                                        allowed_actions=allowed_actions)
-
-
-            # This method is slow but integrates well with beam search, so use it
-            # for inference.
-            # return self._compute_new_states_optimized(state,
-            #                                           log_probs,
-            #                                           hidden_state,
-            #                                           memory_cell,
-            #                                           action_embeddings,
-            #                                           attended_question,
-            #                                           allowed_actions,
-            #                                           self._identifier_literal_action_embedding)
-
-        # else:
-        #     return self._compute_new_states(state,
-        #                                     log_probs,
-        #                                     current_log_probs,
-        #                                     hidden_state,
-        #                                     memory_cell,
-        #                                     action_embeddings,
-        #                                     attended_question,
-        #                                     attention_weights,
-        #                                     allowed_actions,
-        #                                     self._identifier_literal_action_embedding,
-        #                                     prototype_attention_weights=proto_attention_weights,
-        #                                     max_actions=max_actions,
-        #                                     proto_action_probs=proto_action_probs,
-        #                                     proto_action_probs_mask=proto_action_probs_mask,
-        #                                     action_indices=action_indices,
-        #                                     should_copy_proto_actions=self._should_copy_proto_actions)
-
 
     #@timeit
     def _update_decoder_state(self, state: JavaDecoderState) -> Dict[str, torch.Tensor]:
@@ -261,6 +185,8 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
     #@timeit
     def _compute_action_probabilities(self,
                                       state: JavaDecoderState,
+                                      hidden_state: torch.Tensor,
+                                      attended_question: torch.Tensor,
                                       predicted_action_embeddings: torch.Tensor
                                      ) -> Dict[int, Tuple[int, Any, Any, List[str]]]:
         # We take a couple of extra arguments here because subclasses might use them.
@@ -274,26 +200,69 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         # lengths for what we're computing.
 
         group_size = len(state.batch_indices)
-        actions, group_action_embeddings = state.get_valid_actions_embeddings()
 
         batch_results: Dict[int, List[Tuple[int, torch.Tensor, torch.Tensor, List[int]]]] = defaultdict(list)
         for group_index in range(group_size):
+            actions, embeddings, copy_actions, copy_embeddings = state.get_valid_actions_embeddings(group_index)
             predicted_action_embedding = predicted_action_embeddings[group_index]
-            action_embeddings = group_action_embeddings[group_index]
 
             # This is just a matrix product between a (num_actions, embedding_dim) matrix and an
             # (embedding_dim, 1) matrix.
-            action_logits = action_embeddings.mm(predicted_action_embedding.unsqueeze(-1))#.squeeze(-1)
+            action_logits = embeddings.mm(predicted_action_embedding.unsqueeze(-1))#.squeeze(-1)
+
             # Shape: (num_actions, 1)
             current_log_probs = torch.nn.functional.log_softmax(action_logits, dim=0)
+
+            copy_log_probs = None
+            if copy_actions is not None:
+
+                # todo(pr): use the attended question instead
+
+                # Shape: (group_size, 1)
+                mixture_weight = self._mixture_feedforward(attended_question[group_index])
+
+                # weight = self._copy_params(hidden_state[group_index])
+                # mix_weight = torch.nn.functional.sigmoid(torch.nn.functional.sigmoid(weight))
+                # print(mix_weight)
+
+                mix1 = mixture_weight.log()
+                mix2 = (1-mixture_weight).log()
+
+
+                # todo(pr): verify dimesnions
+                copy_action_logits = copy_embeddings.mm(predicted_action_embedding.unsqueeze(-1))
+                copy_current_log_probs = torch.nn.functional.log_softmax(copy_action_logits, dim=0)
+
+                copy_log_probs = (mix1 +
+                                  copy_current_log_probs +
+                                  state.score[group_index]).squeeze(-1)
+
+                current_log_probs = mix2 + current_log_probs
+
+                #
+                # temp = Variable(current_log_probs.data.new(state.num_vocab_identifiers, 1).fill_(0)) + weight
+                # num_class_ident = len(actions[group_index]) - state.num_vocab_identifiers
+                # temp2 = Variable(current_log_probs.data.new(num_class_ident, 1).fill_(0)) + (1-weight)
+                # summed = torch.cat((temp, temp2), dim=0)
+
+
+
+
+                # y = current_log_probs[:state.num_vocab_identifiers, :]
+                # current_log_probs[:state.num_vocab_identifiers, :] = (current_log_probs[:state.num_vocab_identifiers, :] + weight)
+                # current_log_probs[state.num_vocab_identifiers:,:] = (current_log_probs[state.num_vocab_identifiers:,:] + (1-weight))
 
             # This is now the total score for each state after taking each action.  We're going to
             # sort by this later, so it's important that this is the total score, not just the
             # score for the current action.
-            log_probs = state.score[group_index] + current_log_probs
-            batch_results[group_index] = (log_probs,
-                                          action_embeddings,
-                                          actions[group_index])
+            log_probs = (state.score[group_index] +
+                         current_log_probs).squeeze(-1)
+            batch_results[group_index] = {'actions': actions,
+                                          'embeddings': embeddings,
+                                          'log_probs': log_probs,
+                                          'copy_actions': copy_actions,
+                                          'copy_embeddings': copy_embeddings,
+                                          'copy_log_probs': copy_log_probs}
         return batch_results
 
     #@timeit
@@ -355,11 +324,16 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
             considered_actions = None
             probabilities = None
             if state.debug_info is not None:
-                # These indices are the locations in the tuple as created in
-                # _compute_action_probabilities
-                considered_actions = batch_action_probs[group_index][2]
+                considered_actions = batch_action_probs[group_index]['actions']
 
-                probabilities = batch_action_probs[group_index][0].squeeze(-1).data.exp().cpu().numpy().tolist()
+                probabilities = batch_action_probs[group_index]['log_probs'].data.exp().cpu().numpy().tolist()
+
+                if batch_action_probs[group_index]['copy_actions'] is not None:
+                    # print('num copy actions', len(batch_action_probs[group_index]['copy_actions']))
+                    considered_actions = considered_actions + (batch_action_probs[group_index]['copy_actions'])
+                    probabilities = probabilities + batch_action_probs[group_index]['copy_log_probs'].data.exp().cpu().numpy().tolist()
+                    # probabilities.append(batch_action_probs[group_index]['copy_log_probs'].data.exp().cpu().numpy().tolist())
+
             return state.new_state_from_group_index(group_index,
                                                     action,
                                                     new_score,
@@ -371,41 +345,123 @@ class JavaDecoderStep(DecoderStep[JavaDecoderState]):
         new_states = []
 
         for group_index, results in batch_action_probs.items():
-            log_probs, action_embeddings, actions = results
-            if allowed_actions: # todo(pr); is this ok to comment? and not max_actions:
-                lhs, _ = allowed_actions[group_index].split('-->')
-                aindex = state.nonterminal2action2index[lhs][allowed_actions[group_index]]
-                new_states.append(make_state(group_index, actions[aindex], log_probs[aindex], action_embeddings[aindex]))
-            else:
-                batch_states = []
-                # Shape (num_actions)
-                log_probs = log_probs.squeeze(-1)
-                if len(actions) > max_actions:
-                    # efficient code for identifiers
-                    log_probs_cpu = log_probs.data.cpu().numpy()
-                    top_indices = np.argpartition(log_probs_cpu, -max_actions)[-max_actions:]
-
-                    # actually sort the indices
-                    sorted_top_indices = top_indices[np.argsort(log_probs_cpu[top_indices])]
-                    # Need descending order.
-                    sorted_top_indices = sorted_top_indices[::-1]
-
-                    for top_index in sorted_top_indices.tolist():
-                        batch_states.append((log_probs_cpu[top_index], group_index, log_probs[top_index],
-                                            action_embeddings[top_index], actions[top_index]))
+            if allowed_actions:
+                # Training:
+                allowed_action = allowed_actions[group_index]
+                lhs, _ = allowed_action.split('-->')
+                if allowed_action in state.nonterminal2action2index[lhs]:
+                    aindex = state.nonterminal2action2index[lhs][allowed_action]
+                    new_states.append(make_state(group_index,
+                                                 results['actions'][aindex],
+                                                 results['log_probs'][aindex],
+                                                 results['embeddings'][aindex]))
                 else:
-                    log_probs_cpu = log_probs.data.cpu().numpy().tolist()
-                    batch_states = []
+                    # Copy action
+                    # todo(pr): if for loop is too slow compute a nonterminal2action2index for copy
+                    # is suspect there won't be many gains since not many copy actions
+                    # print("allowed action", allowed_action)
+                    for i, action in enumerate(results['copy_actions']):
+                        if action == allowed_action:
+                            break
 
-                    for i in range(len(actions)):
-                        batch_states.append((log_probs_cpu[i], group_index, log_probs[i], action_embeddings[i], actions[i]))
+                    # print('Step')
+                    # print(allowed_action)
+                    # print(results['copy_actions'])
+                    # print(results['copy_log_probs'])
+                    # print(results['copy_action_embeddings'])
+                    new_states.append(make_state(group_index,
+                                                 action,
+                                                 results['copy_log_probs'][i],
+                                                 results['copy_action_embeddings'][i]))
 
-                    # We use a key here to make sure we're not trying to compare anything on the GPU.
+                # if action not in nonterminal2action2index, look in the other one
+            else:
+                # Validation/Test:
+
+                # if len(actions) > max_actions:
+
+                start = time.time()
+                batch_states = self.get_top_batch_states(group_index=group_index,
+                                                         log_probs=results['log_probs'],
+                                                         embeddings=results['embeddings'],
+                                                         actions=results['actions'],
+                                                         max_actions=min(max_actions, len(results['actions'])))
+                end = time.time()
+
+                # print('batch',(end-start)*1000)
+                if results['copy_actions'] is not None:
+                    start2 = time.time()
+                    copy_batch_states = self.get_top_batch_states(group_index=group_index,
+                                                                  log_probs=results['copy_log_probs'],
+                                                                  embeddings=results['copy_embeddings'],
+                                                                  actions=results['copy_actions'],
+                                                                  max_actions=min(max_actions,
+                                                                                  len(results['copy_actions'])))
+
+                    end2 = time.time()
+                    batch_states = batch_states + copy_batch_states
                     batch_states.sort(key=lambda x: x[0], reverse=True)
-
-                if max_actions:
                     batch_states = batch_states[:max_actions]
+                    end3 = time.time()
+                    # print('copy batch',(end2-start2)*1000)
+                    # print('sort',(end3-end2)*1000)
+
+
+                    # # efficient code for identifiers
+                    # log_probs_cpu = log_probs.data.cpu().numpy()
+                    # top_indices = np.argpartition(log_probs_cpu, -max_actions)[-max_actions:]
+                    #
+                    # # actually sort the indices
+                    # sorted_top_indices = top_indices[np.argsort(log_probs_cpu[top_indices])]
+                    # # Need descending order.
+                    # sorted_top_indices = sorted_top_indices[::-1]
+
+                    # for top_index in sorted_top_indices.tolist():
+                    #     batch_states.append((log_probs_cpu[top_index], group_index, log_probs[top_index],
+                    #                         action_embeddings[top_index], actions[top_index]))
+                # else:
+                #     log_probs_cpu = log_probs.data.cpu().numpy().tolist()
+                #     batch_states = []
+                #
+                #     for i in range(len(actions)):
+                #         batch_states.append((log_probs_cpu[i], group_index, log_probs[i], action_embeddings[i], actions[i]))
+                #
+                #     # We use a key here to make sure we're not trying to compare anything on the GPU.
+                #     batch_states.sort(key=lambda x: x[0], reverse=True)
+
+
+
+                # if max_actions:
+                #     batch_states = batch_states[:max_actions]
                 for _, group_index, log_prob, action_embedding, action in batch_states:
                     new_states.append(make_state(group_index, action, log_prob, action_embedding))
 
         return new_states
+
+    @staticmethod
+    def get_top_batch_states(group_index, log_probs, embeddings, actions, max_actions):
+        batch_states = []
+        log_probs_cpu = log_probs.data.cpu().numpy()
+        # Shape (num_actions)
+
+        # print('max actions', max_actions)
+        # print('max actions', len(actions))
+        # print('len cpu', log_probs_cpu.shape)
+        top_indices = np.argpartition(log_probs_cpu, -max_actions)[-max_actions:]
+
+        # actually sort the indices
+        sorted_top_indices = top_indices[np.argsort(log_probs_cpu[top_indices])]
+        # Need descending order.
+        sorted_top_indices = sorted_top_indices[::-1]
+
+        for top_index in sorted_top_indices.tolist():
+            # print('top index', top_index)
+            # print(len(actions))
+            # print(len(log_probs_cpu), len(embeddings))
+            batch_states.append((log_probs_cpu[top_index],
+                                 group_index,
+                                 log_probs[top_index],
+                                 embeddings[top_index],
+                                 actions[top_index]))
+
+        return batch_states

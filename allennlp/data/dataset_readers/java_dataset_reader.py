@@ -60,7 +60,9 @@ class JavaDatasetReader(DatasetReader):
 
         # We first delete the file since it could've been created by another job.
         # read_rules_from_file
-        # os.remove(RULES_FILE)
+        self.read_rules_from_file = True
+        if not self.read_rules_from_file and os.path.exists(RULES_FILE):
+            os.remove(RULES_FILE)
 
     @overrides
     def _read(self, file_path: str):
@@ -81,8 +83,11 @@ class JavaDatasetReader(DatasetReader):
         # todo(pr) remove this one:
         # if os.path.basename(file_path).startswith('train'):
         #     dataset = dataset[:300]
-        # elif os.path.basename(file_path).startswith('valid'):
-        #     dataset = dataset[:30000]
+
+        # Trims the validation dataset since I don't think I trimmed it.
+        if os.path.basename(file_path).startswith('valid'):
+            if self._num_dataset_instances > 2000:
+                dataset = dataset[:2000]
 
         if self._num_dataset_instances != -1:
             dataset = dataset[:self._num_dataset_instances]
@@ -93,25 +98,23 @@ class JavaDatasetReader(DatasetReader):
         # todo(pr): add previous line back
         modified_rules = [d['rules'] for d in dataset]
 
-        og_prototype_rules = [d['prototype_rules'] for d in dataset]
-        prototype_rules = self.split_identifier_rule_into_multiple(
-            [d['prototype_rules'] for d in dataset]
-        )
+        # og_prototype_rules = [d['prototype_rules'] for d in dataset]
+        # prototype_rules = self.split_identifier_rule_into_multiple(
+        #     [d['prototype_rules'] for d in dataset]
+        # )
 
 
-        read_rules_from_file = True
-        if read_rules_from_file:
+
+        if self.read_rules_from_file:
             with open(RULES_FILE, 'r') as file:
                 nonterminal2rules = json.load(file)
         else:
-            # todo(pr): need to add read rules to delete file
             nonterminal2rules = self.trim_grammar_identifiers_literals(modified_rules)
             if os.path.exists(RULES_FILE):
                 with open(RULES_FILE, 'r') as file:
                     prevnt2rules = json.load(file)
             else:
                 prevnt2rules = defaultdict(list)
-
             merged = self.merge_dicts(nonterminal2rules, prevnt2rules)
             with open(RULES_FILE, 'w+') as file:
                 json.dump(merged, file, indent=4)
@@ -119,35 +122,62 @@ class JavaDatasetReader(DatasetReader):
 
         global_production_rule_fields, global_rule2index = self.get_global_rule_fields(nonterminal2rules)
 
-        for rules in prototype_rules:
-            for i,rule in enumerate(rules):
-                # lhs, rhs = rule.split('-->')
-                # No class field/func identifier rules since these cannot be embedded
-                if rule not in global_rule2index:
-                    rules[i] = PLAIN_IDENTIFIER_RULE
+        # for rules in prototype_rules:
+        #     for i,rule in enumerate(rules):
+        #         # lhs, rhs = rule.split('-->')
+        #         # No class field/func identifier rules since these cannot be embedded
+        #         if rule not in global_rule2index:
+        #             rules[i] = PLAIN_IDENTIFIER_RULE
 
         logger.info("Reading the dataset")
         for i, record in enumerate(dataset):
-            instance = self.text_to_instance(record['nl'],
-                                             record['varNames'],
-                                             record['varTypes'],
-                                             record['methodNames'],
-                                             record['methodReturns'],
-                                             global_production_rule_fields,
-                                             global_rule2index,
-                                             nonterminal2actions=nonterminal2rules,
+            if 'prototype_nl' not in record:
+                # To be able to handle the older dataset.
+                instance = self.text_to_instance(record['nl'],
+                                                 record['varNames'],
+                                                 record['varTypes'],
+                                                 record['methodNames'],
+                                                 record['methodReturns'],
+                                                 # global_production_rule_fields,
+                                                 # global_rule2index,
+                                                 nonterminal2actions=nonterminal2rules,
 
-                                             # Pass the modified identifier rules.
-                                             rules=modified_rules[i],
-                                             proto_rules=prototype_rules[i],
-                                             proto_tokens=record['prototype_nl'],
-                                             proto_code=record['prototype_code'],
-                                             proto_og_rules=og_prototype_rules[i],
-                                             protoMethodName=record['prototype_methodName'],
-                                             methodName=record['methodName'],
-                                             code=record['code'],
-                                             path=record['path'],
-                                             prototype_path=record['prototype_path'])
+                                                 # Pass the modified identifier rules.
+                                                 rules=modified_rules[i],
+                                                 proto_rules=[""],
+                                                 proto_tokens=[""],
+                                                 proto_code=[""],
+                                                 proto_og_rules=[""],
+                                                 protoMethodName="",
+                                                 methodName="",
+                                                 code=record['code'],
+                                                 path="",
+                                                 prototype_path="")
+            else:
+                instance = self.text_to_instance(record['nl'],
+                                                 record['varNames'],
+                                                 record['varTypes'],
+                                                 record['methodNames'],
+                                                 record['methodReturns'],
+                                                 # global_production_rule_fields,
+                                                 # global_rule2index,
+                                                 nonterminal2actions=nonterminal2rules,
+
+                                                 # Pass the modified identifier rules.
+                                                 rules=modified_rules[i],
+
+                                                 # todo(pr):change this back
+                                                 proto_rules=modified_rules[i],
+                                                 proto_tokens=record['prototype_nl'],
+                                                 proto_code=record['prototype_code'],
+
+                                                 # todo(pr): change this
+                                                 proto_og_rules=modified_rules[i],
+                                                 protoMethodName=record['prototype_methodName'],
+                                                 methodName=record['methodName'],
+                                                 code=record['code'],
+                                                 path=record['path'],
+                                                 prototype_path=record['prototype_path'])
             yield instance
 
     @staticmethod
@@ -231,9 +261,6 @@ class JavaDatasetReader(DatasetReader):
         # print(sum([count for t, count in type2count.most_common(50)]))
         return [t for t, _ in type2count.most_common(50)]
 
-
-
-
     def split_identifier_rule_into_multiple(self, rules_lst):
         """ The identifier rule is split based on parent state prefix to cut down the
         search space"""
@@ -313,9 +340,9 @@ class JavaDatasetReader(DatasetReader):
                          variable_types: List[str],
                          method_names: List[str],
                          method_types: List[str],
-                         global_rule_fields: List[ProductionRuleField],
-                         globalrule2index: Dict[str, int],
-                         nonterminal2actions: Dict[str, List[str]],
+                         nonterminal2actions: Dict[str, List[str]] = None,
+                         global_rule_fields: List[ProductionRuleField] = None,
+                         globalrule2index: Dict[str, int] = None,
                          code: str = None,
                          rules: List[str] = None,
                          proto_rules: List[str] = None,
@@ -329,8 +356,20 @@ class JavaDatasetReader(DatasetReader):
                          ) -> Instance:
         fields = {}
 
+
+        names = variable_names + method_names
         # variable_name_fields = self.get_field_from_method_variable_names(variable_names)
         # method_name_fields = self.get_field_from_method_variable_names(method_names)
+
+        copy_identifiers_field = ListField(self.get_field_from_method_variable_names(names))
+
+        copy_identifiers_actions = []
+        for name in variable_names:
+            copy_identifiers_actions.append('IdentifierNT-->sriniclass_'+name)
+        for name in method_names:
+            copy_identifiers_actions.append('IdentifierNT-->srinifunc_'+name)
+
+
         # variable_types_field = TextField([Token(t.lower()) for t in variable_types], self._type_indexers)
         # method_return_types_field = TextField([Token(t.lower()) for t in method_types], self._type_indexers)
 
@@ -341,9 +380,18 @@ class JavaDatasetReader(DatasetReader):
         # toks = ['<CURR>'] + utterance[:10]
         # toks += ['<PROTOTYPE>'] + proto_tokens[:10]
         # toks = self.split_camel_case(methodName) + ['<SEP>'] + utterance[:25]
+
+        # print('Original Utterance', utterance_tokens)
         utterance_tokens = [t for t in utterance_tokens if t not in STOPS]
         utterance_tokens = utterance_tokens[:20]
         utterance_tokens = [t.lower() for t in utterance_tokens]
+        if len(utterance_tokens) < 1:
+            # If only token is a stop word, then no tokens will be left over,
+            # so insert one to prevent an empty mask later on.
+            print('GEEEEE')
+            print(utterance_tokens)
+            utterance_tokens = ['a']
+
         utterance_tokens_type = [Token(t) for t in utterance_tokens]
         utterance_field = TextField(utterance_tokens_type,
                                     self._utterance_indexers)
@@ -371,47 +419,72 @@ class JavaDatasetReader(DatasetReader):
             metadata_dict['prototype_code'] = proto_code
         fields['metadata'] = MetadataField(metadata_dict)
 
-        knowledge_graph, entity2isType = self.get_java_class_knowledge_graph(variable_names=variable_names,
-                                                              variable_types=variable_types,
-                                                              method_names=method_names,
-                                                              method_types=method_types,
-                                                              proto_rules=proto_og_rules)
-
-        # We need to iterate over knowledge_graph's entities since these are sorted and each entity in
-        # entity_tokens needs to correspond to knowledge_graph's entities.
-        entity_tokens = []
-        for entity in knowledge_graph.entities:
-            entity_text = knowledge_graph.entity_text[entity]
-            # Entity tokens should contain the camel case split of entity
-            # e.g. isParsed -> is, Parsed and isParsed
-            # So if the utterance has word parsed, it will appear in the exact text set
-            # of knowledge graph field.
-            entity_camel_split = self.split_camel_case_add_original(entity_text)
-            entity_tokens.append([Token(e) for e in entity_camel_split])
-
-        # todo(rajas): add a feature that filters out trivial links between utterance
-        # and variables when the utterance has word 'is' and variable is 'isParsed'.
-        # however if utterance has 'parsed' then it should be linked with 'isParsed'.
-        java_class_field = KnowledgeGraphField(knowledge_graph=knowledge_graph,
-                                               utterance_tokens=utterance_tokens_type,
-                                               token_indexers=self._environment_token_indexers,
-                                               entity_tokens=entity_tokens,
-                                               feature_extractors=self._linking_feature_extractors)
-
-        environment_rules, environmentrule2index = self.get_java_class_specific_rules(knowledge_graph, entity2isType)
 
         if rules is not None:
             # target_rule_field = self.get_target_rule_field(rules, globalrule2index, environmentrule2index)
             # fields['rules'] = target_rule_field
+            idents = []
+            for rule in rules:
+                lhs, rhs = self.split_rule(rule)
+                if lhs == 'IdentifierNT' and 'srini' not in rhs:
+                    tokens = self.split_camel_case_add_original(rhs)
+                    # if len(tokens) <= 1:
+                    #     print('!!!!!!!!!!!')
+                    #     print(tokens, rhs)
+                    f = TextField([Token(t) for t in tokens],
+                                   self._utterance_indexers)
+                    # if type(f) != type(TextField):
+                    #     print('DSKLfjskdlfjsdkl')
+                    #     print(tokens, rhs)
+                    # if f.__class__ != 'allennlp.data.fields.text_field.TextField':
+                    #     print('!!!!!!!')
+                    #     print(tokens, rhs)
+
+                    idents.append(f)
+            # identifiers = MetadataField(idents)
+
             trimmed_rules = self.remove_infrequent_rules(rules, nonterminal2actions)
             fields['rules'] = MetadataField(trimmed_rules)
+        # else:
+            # identifiers = MetadataField({})
+
+        # knowledge_graph, entity2isType = self.get_java_class_knowledge_graph(variable_names=variable_names,
+        #                                                                      variable_types=variable_types,
+        #                                                                      method_names=method_names,
+        #                                                                      method_types=method_types,
+        #                                                                      proto_rules=proto_og_rules)
+        #
+        # # We need to iterate over knowledge_graph's entities since these are sorted and each entity in
+        # # entity_tokens needs to correspond to knowledge_graph's entities.
+        # entity_tokens = []
+        # for entity in knowledge_graph.entities:
+        #     entity_text = knowledge_graph.entity_text[entity]
+        #     # Entity tokens should contain the camel case split of entity
+        #     # e.g. isParsed -> is, Parsed and isParsed
+        #     # So if the utterance has word parsed, it will appear in the exact text set
+        #     # of knowledge graph field.
+        #     entity_camel_split = self.split_camel_case_add_original(entity_text)
+        #     entity_tokens.append([Token(e) for e in entity_camel_split])
+        #
+        # # todo(rajas): add a feature that filters out trivial links between utterance
+        # # and variables when the utterance has word 'is' and variable is 'isParsed'.
+        # # however if utterance has 'parsed' then it should be linked with 'isParsed'.
+        # java_class_field = KnowledgeGraphField(knowledge_graph=knowledge_graph,
+        #                                        utterance_tokens=utterance_tokens_type,
+        #                                        token_indexers=self._environment_token_indexers,
+        #                                        entity_tokens=entity_tokens,
+        #                                        feature_extractors=self._linking_feature_extractors)
+        #
+        # environment_rules, environmentrule2index = self.get_java_class_specific_rules(knowledge_graph, entity2isType)
+        #
+        # entity_field = MetadataField(knowledge_graph.entities)
+
+
 
         # if proto_rules is not None:
         #     # todo(rajas) just make this a production rule field
         #     proto_rule_field = self.get_target_rule_field(proto_rules, globalrule2index, environmentrule2index)
         #     fields['prototype_rules'] = proto_rule_field
-
-        entity_field = MetadataField(knowledge_graph.entities)
 
         fields.update({"utterance": utterance_field,
                        # "prototype_utterance": proto_utterance_field,
@@ -420,49 +493,13 @@ class JavaDatasetReader(DatasetReader):
                        # "method_names": method_name_fields,
                        # "method_return_types": method_return_types_field,
                        # "actions": ListField(global_rule_fields + environment_rules),
-                       "java_class": java_class_field,
-                       "entities": entity_field })
+
+                       # "identifiers": identifiers,
+                       # "java_class": java_class_field,
+                       "copy_identifiers": copy_identifiers_field,
+                       "copy_identifiers_actions": MetadataField(copy_identifiers_actions)})
 
         return Instance(fields)
-
-    # def trim_grammar_identifiers_literals(self, rules_list):
-    #     # This is used remove identifier and literal rules, if they occur below
-    #     # a self._min_identifier_count. This is needed since the action_indexer
-    #     # indexes the entire rule, so instead of having it map the entire rule
-    #     # to an unk we want the rule to become Identifier-->UNK
-    #
-    #     # First get all unique rhsides and their counts.
-    #     lhs2rhscounts = defaultdict(Counter)
-    #     for rules in rules_list:
-    #         for rule in rules:
-    #             lhs, rhs = rule.split('-->')
-    #             lhs2rhscounts[lhs][rhs] += 1
-    #
-    #     lhs2trimmedrhs = defaultdict(list)
-    #     for lhs in lhs2rhscounts:
-    #         # We only trim from a predefined set of identifiers and literals. This
-    #         # means that some literals aren't trimmed, but that's because the
-    #         # expand to a small set of terminals so it's not necessary.
-    #         if lhs in LITERALS_TO_TRIM:
-    #             for rhs, count in lhs2rhscounts[lhs].items():
-    #                 if count >= self._min_identifier_count:
-    #                     lhs2trimmedrhs[lhs].append(rhs)
-    #         else:
-    #             for rhs, _ in lhs2rhscounts[lhs].items():
-    #                 lhs2trimmedrhs[lhs].append(rhs)
-    #
-    #     # Now add the unk rules for each literal
-    #     for nt in LITERALS_TO_TRIM:
-    #         # if nt in lhs2trimmedrhs:
-    #         # We could check first whether any trimming occurred, but this
-    #         # is guaranteed to happen so we add unk by default.
-    #         lhs2trimmedrhs[nt].append(UNK)
-    #         # A DUMMY action is added for when UNK's are removed during test time
-    #         # to prevent the number of embedded actions from being 0.
-    #         # lhs2trimmedrhs[nt].append(DUMMY)
-    #
-    #     return lhs2trimmedrhs
-
 
     def get_java_class_knowledge_graph(self,
                                        variable_names,
@@ -579,25 +616,7 @@ class JavaDatasetReader(DatasetReader):
             else:
                 new_rules.append(rule)
         return new_rules
-    # def get_target_rule_field(self, rules, globalrule2index, environmentrule2index):
-    #     rule_indexes = []
-    #     for rule in rules:
-    #         # It's important that the envirorule if statement comes first. In the case
-    #         # that there is rule for the type from the environment, we want to encourage
-    #         # the parser to copy from the environment.
-    #         if rule in environmentrule2index:
-    #             # Environment rule indexes come after last global index since the
-    #             # environment rules are appended to the global rules list.
-    #             rule_indexes.append(len(globalrule2index) + environmentrule2index[rule])
-    #         elif rule in globalrule2index:
-    #             rule_indexes.append(globalrule2index[rule])
-    #         else:
-    #             lhs, _ = rule.split('-->')
-    #             rule_indexes.append(globalrule2index[lhs + '-->' + UNK])
-    #
-    #     # todo(rajas) convert to an index field
-    #     rule_field = ArrayField(np.array(rule_indexes), padding_value=-1)
-    #     return rule_field
+
     @staticmethod
     def split_rule(rule):
         return rule.split('-->')
@@ -610,9 +629,10 @@ class JavaDatasetReader(DatasetReader):
         # on camel case then generates a TextField for each one.
         fields: List[Field] = []
         for word in words:
-            tokens = [Token(text=w) for w in self.split_camel_case_add_original(word)]
+            tokens = [Token(text=w.lower()) for w in self.split_camel_case_add_original(word)]
             fields.append(TextField(tokens, self._utterance_indexers))
-        return ListField(fields)
+        return fields
+        # return ListField(fields)
 
     def split_camel_case_add_original(self, name: str) -> List[str]:
         # Returns the string and its camel case split version.

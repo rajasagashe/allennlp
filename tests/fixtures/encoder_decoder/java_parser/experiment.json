@@ -25,8 +25,8 @@
   "test_data_path": "tests/fixtures/data/java/sample_data_prototypes.json",
 
   "model": {
-    "should_copy_identifiers": false,
-    "use_utterance_embedder_identifiers": true,
+    "should_copy_identifiers": true,
+    "use_utterance_embedder_identifiers": false,
     "action_embedding_dim": 50,
     "num_linking_features": 7,
     "dropout": 0.5,
@@ -60,13 +60,13 @@
 //      "activations": ["relu", "sigmoid", "sigmoid"],
 //      "dropout": [0.2, 0.0, 0.0]
 //    },
-//    "mixture_feedforward": {
-//      "input_dim": 50,
-//      "num_layers": 3,
-//      "hidden_dims": [5, 2, 1],
-//      "activations": ["relu", "sigmoid", "sigmoid"],
-//      "dropout": [0.2, 0.0, 0.0]
-//    },
+    "mixture_feedforward": {
+      "input_dim": 50,
+      "num_layers": 3,
+      "hidden_dims": [5, 2, 1],
+      "activations": ["relu", "sigmoid", "sigmoid"],
+      "dropout": [0.2, 0.0, 0.0]
+    },
     "max_decoding_steps": 150,
     "decoder_beam_search": {
       "beam_size": 3

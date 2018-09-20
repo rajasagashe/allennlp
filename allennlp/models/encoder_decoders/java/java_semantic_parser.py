@@ -9,6 +9,9 @@ import os
 import time
 
 import numpy as np
+
+from allennlp.modules import TimeDistributed
+from allennlp.modules.seq2vec_encoders import BagOfEmbeddingsEncoder
 from allennlp.training.metrics import Average
 from overrides import overrides
 
@@ -34,7 +37,6 @@ from allennlp.models.encoder_decoders.java.better_step import JavaDecoderStep
 
 
 START_SYMBOL = "MemberDeclaration"
-# START_SYMBOL = "MethodDeclaration"
 
 @Model.register("java_parser")
 class JavaSemanticParser(Model):
@@ -48,6 +50,8 @@ class JavaSemanticParser(Model):
                  max_decoding_steps: int,
                  decoder_beam_search: BeamSearch,
                  action_embedding_dim: int,
+                 should_copy_identifiers: bool,
+                 use_utterance_embedder_identifiers: bool,
                  dropout: float = 0.0,
                  num_linking_features: int = 8,
                  rule_namespace: str = 'rule_labels',
@@ -58,11 +62,21 @@ class JavaSemanticParser(Model):
         super(JavaSemanticParser, self).__init__(vocab)
         self._utterance_embedder = utterance_embedder
         self._should_copy_proto_actions = should_copy_proto_actions
+        self._should_copy_identifiers = should_copy_identifiers
+        self._use_utterance_embedder_identifiers = use_utterance_embedder_identifiers
+
         self._seq2seq_baseline = seq2seq_baseline
         self._max_decoding_steps = max_decoding_steps
         self._decoder_beam_search = decoder_beam_search
 
         self._encoder = encoder
+        # todo(pr): later perhaps add a LSTM
+        embedding_dim = utterance_embedder.get_output_dim()
+        self._identifier_encoder = TimeDistributed(BagOfEmbeddingsEncoder(embedding_dim,
+                                                                          averaged=True))
+
+        self._boe = BagOfEmbeddingsEncoder(embedding_dim, averaged=True)
+
         # self._proto_encoder = proto_encoder
 
         self._input_attention = Attention(attention_function)
@@ -78,6 +92,7 @@ class JavaSemanticParser(Model):
         else:
             self._dropout = lambda x: x
         self._rule_namespace = rule_namespace
+
 
         self._action_embedding_dim = action_embedding_dim
         # self._action_embedder = Embedding(num_embeddings=vocab.get_vocab_size(self._rule_namespace),
@@ -102,36 +117,18 @@ class JavaSemanticParser(Model):
                                              action_embedding_dim=action_embedding_dim,
                                              attention_function=attention_function,
                                              dropout=dropout,
+                                             should_copy_identifiers=should_copy_identifiers,
                                              should_copy_proto_actions=should_copy_proto_actions,
                                              seq2seq_baseline=seq2seq_baseline)
 
         self._serialization_dir = serialization_dir
-        self.load_actions()
-        # em_correct = open('debug/em_correct.txt', 'w+')
-        # em_incorrect = open('debug/em_incorrect.txt', 'w+')
-        # em_correct.close()
-        # em_incorrect.close()
+        self.load_actions(vocab)
 
-        # f = open('debug/pred_target_strings.csv', 'w+')
-        # f.write('Target, Predicted\n')
-        # f.close()
-        #
-        # codef = open('debug/pred_target_code.txt', 'w+')
-        # codef.write('Targ and Predicted Code\n')
-        # codef.close()
-
-    def load_actions(self):
-        # Load all the actions here init the embedder to their size
-        # and embed them all
-        # Do the same for the identifiers, just make sure to use the
-        # utterance embedder instead
+    def load_actions(self, vocab):
 
         # with open(os.path.join(self._serialization_dir, 'grammar_rules.txt'), 'r') as f:
         with open(os.path.join('debug/', 'grammar_rules.txt'), 'r') as f:
             nonterminal2actions = json.load(f)
-
-        num_actions, nonterminal2range = self.number_actions(nonterminal2actions)
-
         self._nonterminal2actions = nonterminal2actions
 
         self._nonterminal2action2index = defaultdict(dict)
@@ -139,31 +136,120 @@ class JavaSemanticParser(Model):
             for i, action in enumerate(actions):
                 self._nonterminal2action2index[nt][action] = i
 
-        # todo(pr): split the identifierNT out of action2iindex
+        # self._use_utterance_embedder_identifiers = False
+        self._nonterminal2action_embeddings = self.get_action_embeddings()
 
+        # if self._use_utterance_embedder_identifiers:
+        #     self._identifier_embeddings = self.get_identifier_embeddings(vocab)
+
+    def get_action_embeddings(self):
+        # First: Count number of actions and map each nonterminal's actions
+        # to an index range.
+        num_actions = 0
+        nonterminal2range = {}
+        for nt, rules in self._nonterminal2actions.items():
+            if self._use_utterance_embedder_identifiers and nt == 'IdentifierNT':
+                print('continuing', nt)
+                exit()
+                continue
+            nonterminal2range[nt] = (num_actions, num_actions + len(rules))
+            num_actions += len(rules)
+
+
+        # Second: Embed each of the actions based on the range
         self._action_embedder = Embedding(num_embeddings=num_actions,
                                           embedding_dim=self._action_embedding_dim)
         if torch.cuda.is_available():
-            print('CUDA is available')
-            # todo(pr): uncomment this
-            # self._action_embedder.cuda()
+            self._action_embedder.cuda()
 
-        else:
-            print('HELLO')
-
-        self._nonterminal2action_embeddings = {}
+        nonterminal2action_embeddings = {}
         for nt, (start, end) in nonterminal2range.items():
-            self._nonterminal2action_embeddings[nt] = self._action_embedder.weight[start:end, :]
+            nonterminal2action_embeddings[nt] = self._action_embedder.weight[start:end, :]
+            # print('Device', self._action_embedder.weight[start:end, :].get_device())
+        return nonterminal2action_embeddings
+
+    def get_identifier_embeddings(self, vocab):
+        # First: split up identifiers on camel case and get their vocabulary
+        # indices.
+        all_indices = []
+        for rule in self._nonterminal2actions['IdentifierNT']:
+            _, identifier_name = rule.split('-->')
+            tokens = self.split_camel_case_add_original(identifier_name)
+            # action_vocab = self.vocab.get_token_to_index_vocabulary(self._rule_namespace)
+            # global_action_id = action_vocab.get(action[0])  # , -1)
+            all_indices.append([vocab.get_token_index(t, 'utterance') for t in tokens])
+
+        # Embed the tokens of the identifier, based on the indices and then average
+        # the embeddings of the tokens for each identifier.
+        all_embeddings = []
+        for indices in all_indices:
+            embeddings = []
+            for index in indices:
+                embeddings.append(self._utterance_embedder._token_embedders['tokens'].weight[index])
+            # embedded = torch.stack(embeddings).squeeze(1)
+            # averaged = self._boe(embedded.unsqueeze(0))
+            all_embeddings.append(embeddings)
+        return all_embeddings
 
 
-    def number_actions(self, nonterminal2actions):
-        index = 0
-        nonterminal2range = {}
-        for nt, rules in nonterminal2actions.items():
-            nonterminal2range[nt] = (index, index + len(rules))
-            index += len(rules)
 
-        return index, nonterminal2range
+    # def get_identifier_embeddings(self, vocab):
+    #     print('get_identifier_embeddings')
+    #     # First: split up identifiers on camel case and get their vocabulary
+    #     # indices.
+    #     all_indices = []
+    #     for rule in self._nonterminal2actions['IdentifierNT']:
+    #         _, identifier_name = rule.split('-->')
+    #         tokens = self.split_camel_case_add_original(identifier_name)
+    #         # action_vocab = self.vocab.get_token_to_index_vocabulary(self._rule_namespace)
+    #         # global_action_id = action_vocab.get(action[0])  # , -1)
+    #         all_indices.append([vocab.get_token_index(t, 'utterance') for t in tokens])
+    #
+    #     # Embed the tokens of the identifier, based on the indices and then average
+    #     # the embeddings of the tokens for each identifier.
+    #
+    #
+    #     self._temp_embedder = Embedding(num_embeddings=4000,
+    #                                       embedding_dim=self._action_embedding_dim)
+    #     if torch.cuda.is_available():
+    #         self._temp_embedder.cuda()
+    #
+    #     embeddings = []
+    #     for indices in all_indices:
+    #         # tensor = Variable(self._action_embedder.weight.data.new(len(indices))).long()
+    #         # tensor = self._action_embedder.weight.data.new(len(indices)).long()
+    #         # for i, index in enumerate(indices):
+    #         #     tensor[i] = index
+    #         #
+    #         # # print(tensor)
+    #         # # Shape: (num_tokens, embedding_dim)
+    #         # embedded = self._utterance_embedder({'tokens': tensor})
+    #         # averaged = self._boe(embedded.unsqueeze(0))
+    #         # embeddings.append(averaged)
+    #
+    #         # alternative to avoid creating a variable
+    #         embed = []
+    #         for index in indices:
+    #             # embed.append(self._utterance_embedder._token_embedders['tokens'].weight[index])
+    #             embed.append(self._temp_embedder.weight[index])
+    #             # embed.append(self._action_embedder.weight[index])
+    #         embedded = torch.stack(embed).squeeze(1)
+    #         averaged = self._boe(embedded.unsqueeze(0))
+    #         embeddings.append(averaged)
+    #     return torch.stack(embeddings).squeeze(1)
+
+    # todo(pr): these are copied from dataset reader, deduplicate these!
+    def split_camel_case_add_original(self, name: str) -> List[str]:
+        # Returns the string and its camel case split version.
+        tokens = self.split_camel_case(name)
+        if len(tokens) > 1:
+            tokens = [name] + tokens
+        return tokens
+    @staticmethod
+    def split_camel_case(name: str) -> List[str]:
+        # Returns the string and its camel case split version.
+        tokens = re.sub('(?!^)([A-Z][a-z]+)', r' \1', name).split()
+        return tokens
 
 
     @overrides
@@ -176,23 +262,60 @@ class JavaSemanticParser(Model):
                 # method_names: Dict[str, torch.LongTensor],
                 # method_return_types: Dict[str, torch.LongTensor],
                 # actions: List[List[ProductionRuleArray]],
-                java_class: Dict[str, torch.LongTensor],
-                entities: List[Set[str]],
+                # java_class: Dict[str, torch.LongTensor],
+                # entities: List[Set[str]],
+                # identifiers: Dict[str, torch.LongTensor],
+
                 rules: List[List[str]] = None,
+                copy_identifiers = None,
+                copy_identifiers_actions = None,
                 prototype_rules: List[torch.Tensor] = None,
                 metadata: List[Dict[str, str]] = None
                 ) -> Dict[str, torch.Tensor]:
 
-        # Encode summary, variables, methods with bi lstm.
-        ##################################################
-
-        # if not hasattr(self, '_nonterminal2actions'):
-        #     self.load_actions()
-
         # (batch_size, input_sequence_length, encoder_output_dim)
         embedded_utterance = self._utterance_embedder(utterance)
-        batch_size, _, _ = embedded_utterance.size()
+        batch_size, _, embedding_dim = embedded_utterance.size()
         utterance_mask = get_text_field_mask(utterance)
+
+        encoder_outputs = self._dropout(self._encoder(embedded_utterance, utterance_mask))
+        # proto_utt_encoder_outputs = self._dropout(self._encoder(proto_embedded_utterance, proto_utterance_mask))
+        # final_proto_utt_encoder_output = util.get_final_encoder_states(proto_utt_encoder_outputs,
+        #                                                      proto_utterance_mask,
+        #                                                      True)
+
+        # This will be our initial hidden state and memory cell for the decoder LSTM.
+
+        # print("Sizes")
+        # print(embedded_utterance.size())
+        # print(utterance_mask.size())
+        # print(encoder_outputs.size())
+        # print('utterance')
+        # print(utterance)
+        final_utt_encoder_output = util.get_final_encoder_states(encoder_outputs,
+                                                                 utterance_mask,
+                                                                 True)
+
+
+        if self._use_utterance_embedder_identifiers:
+            exit()
+            identifier_embeddings = self.get_identifier_embeddings(self.vocab)
+            embeddings = []
+            for i in range(len(identifier_embeddings)):
+                embedded = torch.stack(identifier_embeddings[i]).unsqueeze(0)
+                # print('embed',embedded.size())
+                averaged = self._boe(embedded)
+                # print('average', averaged.size())
+                embeddings.append(averaged)
+
+            all = torch.stack(embeddings).squeeze(1)
+            if torch.cuda.is_available():
+                all.cuda()
+            # print('all', all.size())
+            # print('all vals', all[0][:10])
+            # print(self._utterance_embedder._token_embedders['tokens'].weight.get_device())
+            # print('all vals', all.get_device())
+            self._nonterminal2action_embeddings['IdentifierNT'] = all
 
         # proto_embedded_utterance = self._utterance_embedder(prototype_utterance)
         # proto_utterance_mask = get_text_field_mask(prototype_utterance)
@@ -220,32 +343,34 @@ class JavaSemanticParser(Model):
         # encoder_proto_out = self._dropout(self._proto_encoder(proto_embeddings, proto_mask))
 
 
+
+
+
         # (batch_size, question_length, encoder_output_dim)
-        encoder_outputs = self._dropout(self._encoder(embedded_utterance, utterance_mask))
-        # proto_utt_encoder_outputs = self._dropout(self._encoder(proto_embedded_utterance, proto_utterance_mask))
 
 
+        # todo(pr): for copying
+        # textfield of environment names
+        # Shape: (batch_size, num_actions, num_tokens, embedding dim)
 
-        # This will be our initial hidden state and memory cell for the decoder LSTM.
-        # todo(rajas) change back to encoder is bidirectional from True
-        final_utt_encoder_output = util.get_final_encoder_states(encoder_outputs,
-                                                             utterance_mask,
-                                                             True)
-        # final_proto_utt_encoder_output = util.get_final_encoder_states(proto_utt_encoder_outputs,
-        #                                                      proto_utterance_mask,
-        #                                                      True)
+
+        identifiers_embedding_list = None
+
+        if self._should_copy_identifiers:
+            embedded_identifiers = self._utterance_embedder(copy_identifiers, num_wrapping_dims=1)
+            identifiers_mask = get_text_field_mask(copy_identifiers, num_wrapping_dims=1)
+
+            # todo(pr): try an LSTM encoder here
+
+            # Shape: (batch_size, num_actions, embedding dim)
+            identifiers_encoded = self._identifier_encoder(embedded_identifiers,
+                                                           identifiers_mask)
+            # Since there will be many padding actions we trim to the number of actions per batch.
+            identifiers_embedding_list = [identifiers_encoded[i][:len(actions)] for i, actions in enumerate(copy_identifiers_actions)]
+
+
         memory_cell = Variable(encoder_outputs.data.new(batch_size, self._encoder.get_output_dim()).fill_(0))
-
         initial_score = Variable(embedded_utterance.data.new(batch_size,1).fill_(0))
-
-        # (batch_size, num_entities, num_question_tokens, num_features)
-        # linking_features = java_class['linking']
-        # linking_scores = self._linking_params(linking_features).squeeze(3)
-
-        # flattened_linking_scores, actions_to_entities = self._map_entity_productions(linking_scores,
-        #                                                                              entities,
-        #                                                                              actions)
-
 
         # To make grouping states together in the decoder easier, we convert the batch dimension in
         # all of our tensors into an outer list.  For instance, the encoder outputs have shape
@@ -295,6 +420,9 @@ class JavaSemanticParser(Model):
                                          nonterminal2actions=self._nonterminal2actions,
                                          nonterminal2action_embeddings=self._nonterminal2action_embeddings,
                                          nonterminal2action2index=self._nonterminal2action2index,
+                                         should_copy_identifiers=self._should_copy_identifiers,
+                                         copy_identifier_actions=copy_identifiers_actions,
+                                         copy_identifier_embeddings=identifiers_embedding_list,
                                          # flattened_linking_scores=flattened_linking_scores,
                                          # actions_to_entities=actions_to_entities,
                                          # proto_actions=proto_actions,
@@ -303,15 +431,12 @@ class JavaSemanticParser(Model):
 
 
         if self.training:
-            return self._decoder_trainer.decode(initial_state,
+            x = self._decoder_trainer.decode(initial_state,
                                                 self._decoder_step,
                                                 rules)
+            # self._nonterminal2action_embeddings['IdentifierNT'] = None
+            return x
         else:
-            # action_mapping = {}
-            # for batch_index, batch_actions in enumerate(actions):
-            #     for action_index, action in enumerate(batch_actions):
-            #         action_mapping[(batch_index, action_index)] = action[0]
-            # outputs: Dict[str, Any] = {'action_mapping': action_mapping}
             outputs: Dict[str, Any] = {}
 
             if rules is not None:
@@ -326,33 +451,22 @@ class JavaSemanticParser(Model):
             # Now remove unk rules from the grammar state for better code gen.
             # initial_state.grammar_state = [self._create_grammar_state_no_unks(a) for a in actions]
 
-            # initial_state.grammar_state = [self._create_grammar_state(a) for a in actions]
-
             initial_state.grammar_states = [JavaGrammarState(nonterminals=nonterminals)
-                                     for i in range(batch_size)]
+                                            for _ in range(batch_size)]
             num_steps = self._max_decoding_steps
             initial_state.debug_info = [[] for _ in range(batch_size)]
             best_final_states = self._decoder_beam_search.search(num_steps,
                                                                  initial_state,
                                                                  self._decoder_step,
-                                                                 keep_final_unfinished_states=False)
-            # todo(pr): ok to set keep final unfinished states to True????
+                                                                 keep_final_unfinished_states=True)
 
             outputs['best_action_sequence'] = []
             outputs['debug_info'] = []
             outputs['entities'] = []
-            # outputs['linking_scores'] = linking_scores
-            # if self._linking_params is not None:
-            #     outputs['feature_scores'] = feature_scores
-            # todo(rajas) remove similarity scores
-            # outputs['similarity_scores'] = linking_scores
             outputs['logical_form'] = []
-
             outputs['rules'] = []
 
             for i in range(batch_size):
-                # todo(rajas) try removing this if statement
-
                 if i in best_final_states:
 
                     em = 0
@@ -400,6 +514,7 @@ class JavaSemanticParser(Model):
                         # outputs['beam_loss'].append(best_final_states[i][0].score)  # type: ignore
                         # outputs['entities'].append(entities[i])
 
+            # self._nonterminal2action_embeddings['IdentifierNT'] = None
             return outputs
 
 
@@ -647,114 +762,6 @@ class JavaSemanticParser(Model):
             nonterminal2action_index[lhs].append(i)
         return JavaGrammarState([START_SYMBOL], nonterminal2action_index)
 
-    # @timeit
-    def _embed_actions(self, actions: List[List[ProductionRuleArray]]) -> Tuple[torch.Tensor,
-                                                                                Dict[Tuple[int, int], int]]:
-
-        # todo(pr): delete this method
-        """
-        Given all of the possible actions for all batch instances, produce an embedding for them.
-        There will be significant overlap in this list, as the production rules from the grammar
-        are shared across all batch instances.  Our returned tensor has an embedding for each
-        `unique` action, so we also need to return a mapping from the original ``(batch_index,
-        action_index)`` to our new ``global_action_index``, so that we can get the right action
-        embedding during decoding.
-
-        Returns
-        -------
-        action_embeddings : ``torch.Tensor``
-            Has shape ``(num_unique_actions, action_embedding_dim)``.
-        action_map : ``Dict[Tuple[int, int], int]``
-            Maps ``(batch_index, action_index)`` in the input action list to ``action_index`` in
-            the ``action_embeddings`` tensor.  All non-embeddable actions get mapped to `-1` here.
-        """
-        embedded_actions = self._action_embedder.weight
-
-        # Now we just need to make a map from `(batch_index, action_index)` to
-        # `global_action_index`.  global_action_ids has the list of all unique actions; here we're
-        # going over all of the actions for each batch instance so we can map them to the global
-        # action ids.
-        action_vocab = self.vocab.get_token_to_index_vocabulary(self._rule_namespace)
-        # todo(rajas): optimize the code to stop at global actions and repeat for each batch
-        action_map: Dict[Tuple[int, int], int] = {}
-        for batch_index, instance_actions in enumerate(actions):
-            for action_index, action in enumerate(instance_actions):
-                if not action[0]:
-                    # This rule is padding.
-                    continue
-                # If it's global look for it's id in the action vocab.
-                # Since some actions are both in the vocab and copied from the enviro
-                # it's important to check this.
-                if action[1]:
-                    global_action_id = action_vocab.get(action[0]) #, -1)
-                else:
-                    global_action_id = -1
-                action_map[(batch_index, action_index)] = global_action_id
-        return embedded_actions, action_map
-
-    @staticmethod
-    # @timeit
-    def _map_entity_productions(linking_scores: torch.FloatTensor,
-                                batch_entities: List[Set[str]],
-                                actions: List[List[ProductionRuleArray]]) -> Tuple[torch.Tensor,
-                                                                                   Dict[Tuple[int, int], int]]:
-        """
-        Constructs a map from ``(batch_index, action_index)`` to ``(batch_index * entity_index)``.
-        That is, some actions correspond to terminal productions of entities from our table.  We
-        need to find those actions and map them to their corresponding entity indices, where the
-        entity index is its position in the list of entities returned by the ``world``.  This list
-        is what defines the second dimension of the ``linking_scores`` tensor, so we can use this
-        index to look up linking scores for each action in that tensor.
-
-        For easier processing later, the mapping that we return is `flattened` - we really want to
-        map ``(batch_index, action_index)`` to ``(batch_index, entity_index)``, but we are going to
-        have to use the result of this mapping to do ``index_selects`` on the ``linking_scores``
-        tensor.  You can't do ``index_select`` with tuples, so we flatten ``linking_scores`` to
-        have shape ``(batch_size * num_entities, num_question_tokens)``, and return shifted indices
-        into this flattened tensor.
-
-        Parameters
-        ----------
-        linking_scores : ``torch.Tensor``
-            A tensor representing linking scores between each table entity and each question token.
-            Has shape ``(batch_size, num_entities, num_question_tokens)``.
-        worlds : ``List[WikiTablesWorld]``
-            The ``World`` for each batch instance.  The ``World`` contains a reference to the
-            ``TableKnowledgeGraph`` that defines the set of entities in the linking.
-        actions : ``List[List[ProductionRuleArray]]``
-            The list of possible actions for each batch instance.  Our action indices are defined
-            in terms of this list, so we'll find entity productions in this list and map them to
-            entity indices from the entity list we get from the ``World``.
-
-        Returns
-        -------
-        flattened_linking_scores : ``torch.Tensor``
-            A flattened version of ``linking_scores``, with shape ``(batch_size * num_entities,
-            num_question_tokens)``.
-        actions_to_entities : ``Dict[Tuple[int, int], int]``
-            A mapping from ``(batch_index, action_index)`` to ``(batch_size * num_entities)``,
-            representing which action indices correspond to which entity indices in the returned
-            ``flattened_linking_scores`` tensor.
-        """
-        batch_size, num_entities, num_question_tokens = linking_scores.size()
-        entity_map: Dict[Tuple[int, str], int] = {}
-        for batch_index, entities in enumerate(batch_entities):
-            for entity_index, entity in enumerate(entities):
-                entity_map[(batch_index, entity)] = batch_index * num_entities + entity_index
-        actions_to_entities: Dict[Tuple[int, int], int] = {}
-        for batch_index, action_list in enumerate(actions):
-            for action_index, action in enumerate(action_list):
-                if not action[0]:
-                    # This action is padding.
-                    continue
-                _, production = action[0].split('-->')
-                entity_index = entity_map.get((batch_index, production), None)
-                if entity_index is not None:
-                    actions_to_entities[(batch_index, action_index)] = entity_index
-        flattened_linking_scores = linking_scores.view(batch_size * num_entities, num_question_tokens)
-        return flattened_linking_scores, actions_to_entities
-
-
     @classmethod
     def from_params(cls, vocab, params: Params) -> 'SimpleSeq2Seq':
         utterance_embedder_params = params.pop("utterance_embedder")
@@ -766,6 +773,9 @@ class JavaSemanticParser(Model):
         dropout = params.pop_float('dropout', 0.0)
         num_linking_features = params.pop_int('num_linking_features', 8)
         should_copy_proto_actions = params.pop_bool('should_copy_proto_actions', True)
+        should_copy_identifiers = params.pop_bool('should_copy_identifiers')
+        use_utterance_embedder_identifiers = params.pop_bool('use_utterance_embedder_identifiers')
+
         is_seq2seq_baseline = params.pop_bool('is_seq2seq_baseline', True)
         decoder_beam_search = BeamSearch.from_params(params.pop("decoder_beam_search"))
         mixture_feedforward_type = params.pop('mixture_feedforward', None)
@@ -808,6 +818,8 @@ class JavaSemanticParser(Model):
                    max_decoding_steps=max_decoding_steps,
                    decoder_beam_search=decoder_beam_search,
                    num_linking_features=num_linking_features,
+                   should_copy_identifiers=should_copy_identifiers,
+                   use_utterance_embedder_identifiers=use_utterance_embedder_identifiers,
                    dropout=dropout,
                    should_copy_proto_actions=should_copy_proto_actions,
                    seq2seq_baseline=is_seq2seq_baseline,
