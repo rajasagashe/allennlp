@@ -1,4 +1,16 @@
-""" This performs the filters from filter-by-num-javadocs.py and pairs with prototypes from pair_with_clossest_comments"""
+""" This performs the filters from filter-by-num-javadocs.py and pairs with prototypes from pair_with_clossest_comments
+
+python allennlp/scripts/java/pipeline.py --indir=/home/rajas/final/data/ --outdir=/home/rajas/final/data/
+
+
+Future Ref, Run on 500 recs from official dataset
+Oracle-train train bleu .385
+Oracle-train valid bleu .349
+
+Oracle-train train bleu .701
+Oracle-train valid bleu .610
+
+"""
 
 
 import json
@@ -16,7 +28,9 @@ from sklearn.metrics import jaccard_similarity_score
 from nltk.corpus import stopwords
 from datasketch import MinHashLSHForest, MinHash
 import random
+import numpy as np
 STOPS = set(stopwords.words("english"))
+
 
 def combine_name_types(names, types):
     combine_str = ""
@@ -115,18 +129,21 @@ def get_nl_tokens(rec, nl_len):
 def print_len(dataset):
     lens =[len(methods) for _, methods in dataset.items()]
     print(sum(lens))
+
 def flatten(path2methods):
     return [m for _, methods in path2methods.items() for m in methods]
-def limit(path2methods, num_recs):
-    newpath2methods = {}
-    count = 0
-    for k, methods in path2methods.items():
-        newpath2methods[k] = methods
-        count += len(methods)
-        if count > num_recs:
-            break
-    return newpath2methods
 
+
+def limit(path2methods, num_recs):
+    # newpath2methods = {}
+    # count = 0
+    # for k, methods in path2methods.items():
+    #     newpath2methods[k] = methods
+    #     count += len(methods)
+    #     if count > num_recs:
+    #         break
+    # return newpath2methods
+    return path2methods[:num_recs]
 
 @timeit
 def get_dataset_class2methods(filename):
@@ -177,39 +194,51 @@ def filter_code_length(class2methods):
 def filter_out_tests(class2methods):
     return {k: methods for k, methods in class2methods.items() if 'test' not in methods[0]['className'].lower()}
 
-def get_filtered_dataset(dataset_filename):
+# def get_filtered_dataset(dataset_filename):
+#
+#     dataset = get_dataset_class2methods(dataset_filename)
+#     print_len(dataset)
+#
+#     dataset = filter_out_tests(dataset)
+#     print_len(dataset)
+#
+#     dataset = filter_code_length(dataset)
+#     print_len(dataset)
+#
+#     dataset = filter_duplicates(dataset)
+#     print_len(dataset)
+#
+#     # # This has to come last, to ensure at least 2
+#     # # methods present for prototypes within class
+#     dataset = filter_by_javadoc_count(dataset, 1)
+#     print_len(dataset)
+#
+#
+#     # with open(filtered_filename, 'w') as file:
+#     #     json.dump(dataset, file)
+#     print(len(flatten(dataset)), "Num records after filtering")
+#
+#     return dataset
 
-    dataset = get_dataset_class2methods(dataset_filename)
-    print_len(dataset)
 
-    dataset = filter_out_tests(dataset)
-    print_len(dataset)
+def add_prototype_in_rec(rec, proto_rec, i, dataset_index):
+    # rec['prototype_nl' + str(i)] = proto_rec['nl']
+    # rec['prototype_code' + str(i)] = proto_rec['code']
+    # rec['prototype_methodName' + str(i)] = proto_rec['methodName']
+    # rec['prototype_rules' + str(i)] = proto_rec['rules']
+    # rec['prototype_path' + str(i)] = proto_rec['path']
 
-    dataset = filter_code_length(dataset)
-    print_len(dataset)
+    # For the new dataset:
+    rec['prototype_nlToks' + str(i)] = proto_rec['nlToks']
+    rec['prototype_code' + str(i)] = proto_rec['code']
+    rec['prototype_renamed' + str(i)] = proto_rec['renamed']
+    # rec['prototype_methodName' + str(i)] = proto_rec['methodName']
+    # rec['prototype_rules' + str(i)] = proto_rec['rules']
+    rec['prototype_repo' + str(i)] = proto_rec['repo']
+    rec['prototype_className' + str(i)] = proto_rec['className']
 
-    dataset = filter_duplicates(dataset)
-    print_len(dataset)
+    rec['prototype_datasetIndex' + str(i)] = dataset_index
 
-    # # This has to come last, to ensure at least 2
-    # # methods present for prototypes within class
-    dataset = filter_by_javadoc_count(dataset, 1)
-    print_len(dataset)
-
-
-    # with open(filtered_filename, 'w') as file:
-    #     json.dump(dataset, file)
-    print(len(flatten(dataset)), "Num records after filtering")
-
-    return dataset
-
-
-def add_prototype_in_rec(rec, proto_rec):
-    rec['prototype_nl'] = proto_rec['nl']
-    rec['prototype_code'] = proto_rec['code']
-    rec['prototype_methodName'] = proto_rec['methodName']
-    rec['prototype_rules'] = proto_rec['rules']
-    rec['prototype_path'] = proto_rec['path']
 
 def pair_oracle_best_train_bleu_lsh(dataset,
                                     proto_cand_dataset=None,
@@ -221,10 +250,10 @@ def pair_oracle_best_train_bleu_lsh(dataset,
     if proto_cand_dataset == None:
         proto_cand_dataset = dataset
 
-    forest = MinHashLSHForest(num_perm=256)
+    forest = MinHashLSHForest(num_perm=128)
 
     for i, method in enumerate(tqdm(proto_cand_dataset)):
-        m1 = MinHash(num_perm=256)
+        m1 = MinHash(num_perm=128)
         for d in method['code']:
             m1.update(d.encode('utf8'))
         forest.add(str(i), m1)
@@ -232,33 +261,52 @@ def pair_oracle_best_train_bleu_lsh(dataset,
 
     total_bleu = 0.0
     for i, method in enumerate(tqdm(dataset)):
-        m1 = MinHash(num_perm=256)
+        m1 = MinHash(num_perm=128)
         for d in method['code']:
             m1.update(d.encode('utf8'))
         result = forest.query(m1, num_candidates)
 
         best_index = i
         best_bleu = 0.0
+
+        bleus = []
+        dataset_indices = []
         for index_str in result:
             index = int(index_str)
             if index != i:
                 bleu = get_bleu(gold_seq=method['code'],
-                               pred_seq=proto_cand_dataset[index]['code'])
-                if bleu > best_bleu:
-                    best_bleu = bleu
-                    best_index = index
+                                pred_seq=proto_cand_dataset[index]['code'])
+                # bleu_indices.append((bleu, index))
+                bleus.append(bleu)
+                dataset_indices.append(index)
+                # if bleu > best_bleu:
+                #     best_bleu = bleu
+                #     best_index = index
+
+        if len(bleus) < 3:
+            print("Omitted Method due to no neighbors MinHash!!!!")
+            continue
+
+        # print(bleus)
+        # print(dataset_indices)
+        top_num = 3
+        bleu_array = np.array(bleus)
+        top_indices = np.argpartition(bleu_array, -top_num)[-top_num:]
+        sorted_top_indices = top_indices[np.argsort(bleu_array[top_indices])]
+        # Descending order
+        sorted_top_indices = sorted_top_indices[::-1].tolist()
 
 
-        if best_index == i:
-            # print(i, result)
-            best_index = random.randint(0, len(dataset))
-            # print(method['nl'])
-            # print(method['code'])
+        for i, cand_index in enumerate(sorted_top_indices):
+            dataset_index = dataset_indices[cand_index]
+            method2 = proto_cand_dataset[dataset_index]
 
-        method2 = proto_cand_dataset[best_index]
-        total_bleu += get_bleu(gold_seq=method['code'],
-                               pred_seq=method2['code'])
-        add_prototype_in_rec(rec=method, proto_rec=method2)
+            if i == 0:
+                # This is the best one.
+                total_bleu += get_bleu(gold_seq=method['code'],
+                                       pred_seq=method2['code'])
+
+            add_prototype_in_rec(rec=method, proto_rec=method2, i=i, dataset_index=cand_index)
     print(total_bleu / len(dataset), "bleu Oracle, from train")
 
 def pair_oracle_best_bleu_in_class(dataset):
@@ -292,11 +340,11 @@ def pair_jaccard_nl_from_train_lsh(dataset, proto_cand_dataset=None, nl_len=25):
     if proto_cand_dataset == None:
         proto_cand_dataset = dataset
 
-    forest = MinHashLSHForest(num_perm=256)
+    forest = MinHashLSHForest(num_perm=128)
 
     nl2index = defaultdict(list)
     for i, method in enumerate(tqdm(proto_cand_dataset)):
-        m1 = MinHash(num_perm=256)
+        m1 = MinHash(num_perm=128)
         nl = get_nl_tokens(method, nl_len)
         nl2index[''.join(nl)].append(i)
         for d in nl:
@@ -308,7 +356,7 @@ def pair_jaccard_nl_from_train_lsh(dataset, proto_cand_dataset=None, nl_len=25):
 
     total_bleu = 0.0
     for i, method in enumerate(tqdm(dataset)):
-        m1 = MinHash(num_perm=256)
+        m1 = MinHash(num_perm=128)
         nl = get_nl_tokens(method, nl_len)
         for d in nl:
             m1.update(d.encode('utf8'))
@@ -364,6 +412,17 @@ def pair_jaccard_nl_within_class(path2methods, nl_len=25):
     print(total_bleu / len(flatten(path2methods)), "bleu NL jaccard, within class")
 
 
+def read(dataset_file):
+    # print(dataset_file)
+    dataset = []
+    with open(dataset_file, 'r') as file:
+        for i,line in enumerate(file):
+            dataset.append(json.loads(line))
+            # if i > 500:
+            #     return dataset
+            # return json.load(file)
+    return dataset
+
 def dump(dataset, outdir, filename, num):
     outfile = os.path.join(outdir, filename)
     with open(outfile, 'w') as file:
@@ -376,53 +435,56 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     dataset_lens = {'train': 100000,
-                     'valid': 2000,
-                     # "test": 2000
+                    'valid': 2000,
+                    # "test": 2000
                     }
+
     datasets = {}
     for dt, num_recs in dataset_lens.items():
-        print(dt, '='*30)
-        dataset_filename = os.path.join(args.indir,"%s.dataset" % (dt))
+        print('Reading', dt, '='*30)
+        dataset_filename = os.path.join(args.indir,"%s_shuffled.json" % (dt))
 
-        dataset = get_filtered_dataset(dataset_filename)
+        # Commenting out filtering to keep dataset consistent.
+        # dataset = get_filtered_dataset(dataset_filename)
+        dataset = read(dataset_filename)
         datasets[dt] = limit(dataset, num_recs)
 
     # dump(flatten(datasets['train']), args.outdir, 'train-small.dataset', 8000)
 
     for dt in dataset_lens.keys():
-        print(dt, '=' * 30)
+        print('Processing', dt, '=' * 30)
         num_recs = dataset_lens[dt]
-        path2methods = datasets[dt]
-        dataset_lst = flatten(path2methods)
+        # path2methods = datasets[dt]
+        # dataset_lst = flatten(path2methods)
+        dataset = datasets[dt]
 
+        # pair_jaccard_nl_from_train_lsh(dataset,
+        #                  proto_cand_dataset=datasets['train'],#flatten(datasets['train']),
+        #                   nl_len=25)
+        # dump(dataset, args.outdir,
+        #          "%s-filtered-proto-nljaccard-all.dataset" % (dt),
+        #          num_recs)
 
-        pair_jaccard_nl_from_train_lsh(dataset_lst,
-                         proto_cand_dataset=flatten(datasets['train']),
-                          nl_len=25)
-        dump(dataset_lst, args.outdir,
-                 "%s-filtered-proto-nljaccard-all.dataset" % (dt),
-                 num_recs)
-
-        pair_jaccard_nl_within_class(path2methods, nl_len=25)
-        dump(dataset_lst, args.outdir,
-             "%s-filtered-proto-nljaccard-class.dataset" % (dt),
-             num_recs)
+        # pair_jaccard_nl_within_class(path2methods, nl_len=25)
+        # dump(dataset, args.outdir,
+        #      "%s-filtered-proto-nljaccard-class.dataset" % (dt),
+        #      num_recs)
 
         if dt == 'valid':
             num_candidates = 40000
         elif dt == 'train':
             num_candidates = 2000
-        pair_oracle_best_train_bleu_lsh(dataset_lst,
-                                    proto_cand_dataset=flatten(datasets['train']),
+        pair_oracle_best_train_bleu_lsh(dataset,
+                                        proto_cand_dataset=datasets['train'],#flatten(datasets['train']),
                                         num_candidates=num_candidates)
-        dump(dataset_lst, args.outdir,
-             "%s-filtered-proto-oraclebleu-all.dataset" % (dt),
+        dump(dataset, args.outdir,
+             "%s-3proto-oraclebleu-all.dataset" % (dt),
              num_recs)
 
-        pair_oracle_best_bleu_in_class(path2methods)
-        dump(dataset_lst, args.outdir,
-             "%s-filtered-proto-oraclebleu-class.dataset" % (dt),
-             num_recs)
+        # pair_oracle_best_bleu_in_class(path2methods)
+        # dump(dataset, args.outdir,
+        #      "%s-filtered-proto-oraclebleu-class.dataset" % (dt),
+        #      num_recs)
 
 
 
