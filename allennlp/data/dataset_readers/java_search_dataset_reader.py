@@ -14,7 +14,7 @@ from allennlp.common.file_utils import cached_path
 from allennlp.common import Params
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
 from allennlp.data.fields import ProductionRuleField, MetadataField, KnowledgeGraphField
-from allennlp.data.fields import Field, NoCountListField, ArrayField
+from allennlp.data.fields import Field, NoCountListField, ArrayField, NoCountListFieldBatch
 from allennlp.data.fields import TextField
 from allennlp.data.instance import Instance
 from allennlp.data.token_indexers import TokenIndexer, SingleIdTokenIndexer
@@ -44,30 +44,15 @@ class JavaSearchDatasetReader(DatasetReader):
     def __init__(self,
                  utterance_indexers: Dict[str, TokenIndexer],
                  code_indexers: Dict[str, TokenIndexer],
-                 min_identifier_count: int,
                  num_dataset_instances: int,
                  tokenizer: Tokenizer = None,
-                 linking_feature_extractors: List[str] = None,
                  lazy: bool = False) -> None:
         super().__init__(lazy)
         self._utterance_indexers = utterance_indexers
         # self._code_indexers = code_indexers
         self._code_indexers = utterance_indexers
-
-        self._environment_token_indexers = {"tokens": SingleIdTokenIndexer()}
-
-        self._environment_token_indexers = {"tokens": SingleIdTokenIndexer()}
-
-        self._min_identifier_count = min_identifier_count
         self._num_dataset_instances = num_dataset_instances
         self._tokenizer = tokenizer or WordTokenizer()
-        self._linking_feature_extractors = linking_feature_extractors
-
-        # We first delete the file since it could've been created by another job.
-        # read_rules_from_file
-        self.read_rules_from_file = True
-        if not self.read_rules_from_file and os.path.exists(RULES_FILE):
-            os.remove(RULES_FILE)
 
     @overrides
     def _read(self, file_path: str):
@@ -81,105 +66,76 @@ class JavaSearchDatasetReader(DatasetReader):
         # dataset = dataset[:2000]
         if self._num_dataset_instances != -1:
             dataset = dataset[:self._num_dataset_instances]
-        dataset = [self.return_stripped_rec(r) for r in dataset]
+
+        # Remove records which don't have prototype keys. This can happen since
+        # LSH wasn't able to find any neighbors
+        dataset = [r for r in dataset if self.has_prototype(r)]
+
+
+        if os.path.basename(file_path).startswith('train'):
+            self.train_dataset = dataset
+
+
+        # We are evaluating, so load it in
+        if not hasattr(self, 'train_dataset'):
+            with open('/home/rajas/final/data/official/train-3proto-oraclebleu-all.dataset') as dataset_file:
+                self.train_dataset = json.load(dataset_file)
+            self.train_dataset = [r for r in self.train_dataset if self.has_prototype(r)]
+
 
         contexts = []
-        for rec in dataset:
+        # Very important that train_dataset is used here since during validation the
+        # best context from train is used not validation!
+        for rec in self.train_dataset:
             contexts.append(self.get_context_field(rec))
         all_context_field = NoCountListField(contexts)
 
-        is_validation = False
-        if os.path.basename(file_path).startswith('train'):
-            self.train_dataset = dataset
-            # todo: Remove this
-            # dataset = dataset[:5000]
-        else:
-            # The Validation datasets could be very large!
-            dataset = dataset[:5000]
-            is_validation = True
-
-            codes = []
-            for rec in self.train_dataset:
-                preprocessed_code = self.preprocess_code(rec['code'])
-                codes.append(TextField([Token(c) for c in preprocessed_code],
-                                     self._code_indexers))
-            all_code_field = NoCountListField(codes)
-
-        all_code_str_field = MetadataField(self.train_dataset)
-
-
-
-        # todo(pr):
+        all_train_records = MetadataField(self.train_dataset)
 
         logger.info("Reading the dataset")
         for i, record in enumerate(dataset):
-            # instance = self.text_to_instance(record['nl'],
-            #                                  record['varNames'],
-            #                                  record['varTypes'],
-            #                                  record['methodNames'],
-            #                                  record['methodReturns'],
-            #                                  methodName=record['methodName'],
-            #                                  className=record['className'],
-            #                                  code=record['code'],
-            #                                  path="")
-
-            # random_num = i
-            # while random_num == i:
-            #     random_num = random.randint(0, len(dataset)-1)
-            # random_record = dataset[random_num]
-
-            # random_record = random.sample(dataset, 1)[0]
-            if is_validation:
-                instance = self.text_to_instance(record=record,
-                                                 # random_record=random_record,
-                                                 index=i,
-                                                 all_code_field=all_code_field,
-                                                 all_code_str_field=all_code_str_field,
-                                                 all_context_field=all_context_field)
-            else:
-                instance = self.text_to_instance(record=record,
-                                                 # random_record=random_record,
-                                                 index=i,
-                                                 all_code_str_field=all_code_str_field,
-                                                 all_context_field=all_context_field)
+            instance = self.text_to_instance(record=record,
+                                             index=i,
+                                             all_train_records=all_train_records,
+                                             all_context_field=all_context_field)
             yield instance
+
+    def has_prototype(self, rec):
+        return 'prototype_nl0' in rec
 
     @overrides
     def text_to_instance(self,  # type: ignore
                          record,
                          # random_record,
                          index,
-                         all_code_field=None,
-                         all_code_str_field=None,
-                         all_context_field=None
+                         all_context_field,
+                         # all_code_field=None,
+                         all_train_records=None,
                          ) -> Instance:
 
-        correct_context_field = self.get_context_field(record)
+        curr_context_field = self.get_context_field(record)
+        prototype_context_field = self.get_prototype_context_fields(record)
+        # correct_context_field = self.get_context_field(record)
         # random_context_field = self.get_context_field(random_record)
+        # preprocessed_code = self.preprocess_code(record['code'])
+        # code_field = TextField([Token(c) for c in preprocessed_code], self._code_indexers)
 
-        preprocessed_code = self.preprocess_code(record['code'])
-        code_field = TextField([Token(c) for c in preprocessed_code], self._code_indexers)
-
-        # print('Target field', record)
-        # print('Random field', random_record)
-
-        fields = {"context": correct_context_field,
-                  # "random_context": random_context_field,
-                  "code": code_field,
-                  "record_indices": MetadataField(index)
+        fields = {'current_context': curr_context_field,
+                  "prototype_context": prototype_context_field,
+                  "record_indices": MetadataField(index),
+                  'all_context': all_context_field,
+                  'all_train_records': all_train_records,
+                  'current_record': MetadataField(record)
                  }
 
-        if all_code_field is not None:
-            fields.update({'all_code': all_code_field,
-                           'all_train_records': all_code_str_field,
-                           'current_record': MetadataField(record)})
-        if all_code_str_field is not None:
-            fields.update({'all_train_records': all_code_str_field})
-
-        if all_context_field is not None:
-            fields.update({'all_context': all_context_field})
-
         return Instance(fields)
+
+    def get_prototype_context_fields(self, rec):
+        fields = []
+        for i in range(3):
+            proto_rec = {'nl': rec['prototype_nl' + str(i)]}
+            fields.append(self.get_context_field(proto_rec))
+        return NoCountListFieldBatch(fields)
 
     def preprocess_code(self, code):
         return [c for c in code if len(c) > 1][:75]
@@ -205,17 +161,18 @@ class JavaSearchDatasetReader(DatasetReader):
         # record['varTypes'],
         # record['methodNames'],
         # record['methodReturns'],
-        method_name=record['method_name']
-        class_name=record['class_name']
 
-        utterance_tokens = [t for t in utterance if t not in STOPS]
-        utterance_tokens = utterance_tokens[:20]
+        # method_name=record['method_name']
+        # class_name=record['class_name']
+
+        # utterance_tokens = [t for t in utterance if t not in STOPS]
+        utterance_tokens = utterance[:25]
         utterance_tokens = [t.lower() for t in utterance_tokens]
         if len(utterance_tokens) < 1:
             utterance_tokens = ['a']
 
-        context_lst = ['|MethodName|']
-        context_lst.extend(self.split_camel_case_add_original(method_name))
+        # context_lst = ['|MethodName|']
+        # context_lst.extend(self.split_camel_case_add_original(method_name))
 
         # context_lst.append('|ClassName|')
         # context_lst.extend(self.split_camel_case_add_original(class_name))
@@ -233,8 +190,8 @@ class JavaSearchDatasetReader(DatasetReader):
         # for name in method_types[:5]:
         #     context_lst.extend(self.split_camel_case_add_original(name))
 
-        context_lst.append('|Utterance|')
-        context_lst.extend(utterance_tokens)
+        context_lst = utterance_tokens
+        # context_lst.extend(utterance_tokens)
 
         context_field = TextField([Token(t) for t in context_lst], self._utterance_indexers)
         return context_field
@@ -276,16 +233,12 @@ class JavaSearchDatasetReader(DatasetReader):
         tokenizer = Tokenizer.from_params(params.pop('tokenizer', {}))
         # todo(rajas): utterance indexer should be renamed to identifier indexer
         utterance_indexers = TokenIndexer.dict_from_params(params.pop('utterance_indexers'))
-        min_identifier_count = params.pop_int('min_identifier_count')
         num_dataset_instances = params.pop_int('num_dataset_instances', -1)
-        linking_feature_extracters = params.pop('linking_feature_extractors', None)
-        # identifier_indexers = TokenIndexer.dict_from_params(params.pop('identifier_indexers'))
         code_indexers = TokenIndexer.dict_from_params(params.pop('code_indexers'))
+
         params.assert_empty(cls.__name__)
         return cls(utterance_indexers=utterance_indexers,
-                   min_identifier_count=min_identifier_count,
                    num_dataset_instances=num_dataset_instances,
-                   linking_feature_extractors=linking_feature_extracters,
                    # identifier_indexers=identifier_indexers,
                    code_indexers=code_indexers,
                    tokenizer=tokenizer,
