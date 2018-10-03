@@ -27,21 +27,32 @@ from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
-NUM_PROTOTYPES = 3
 @DatasetReader.register("java_search")
 class JavaSearchDatasetReader(DatasetReader):
     def __init__(self,
                  utterance_indexers: Dict[str, TokenIndexer],
-                 code_indexers: Dict[str, TokenIndexer],
+                 # code_indexers: Dict[str, TokenIndexer],
                  num_dataset_instances: int,
+                 use_code:bool,
+                 num_random: int = 3,
                  tokenizer: Tokenizer = None,
                  lazy: bool = False) -> None:
         super().__init__(lazy)
         self._utterance_indexers = utterance_indexers
         # self._code_indexers = code_indexers
-        self._code_indexers = utterance_indexers
+        # self._code_indexers = utterance_indexers
         self._num_dataset_instances = num_dataset_instances
         self._tokenizer = tokenizer or WordTokenizer()
+        # self.USE_CODE = True
+
+
+        self._use_code = use_code
+        self._num_random = num_random
+
+        # self._use_code = True
+        # self._num_random = 9
+
+        self.NUM_PROTOTYPES = 3
 
     @overrides
     def _read(self, file_path: str):
@@ -103,13 +114,15 @@ class JavaSearchDatasetReader(DatasetReader):
                          ) -> Instance:
 
         curr_context_field = self.get_context_field(record['nl'])
-        prototype_context_field, prototype_bleu_field = self.get_prototype_context_fields(record)
-        random_context_field, random_bleu_field = self.get_random_context_fields(record['nl'])
+        curr_code_field = self.get_code_field(record['code'])
+
+        prototype_context_field, prototype_code_field, prototype_bleu_field = self.get_prototype_context_fields(record)
+        random_context_field, random_code_field, random_bleu_field = self.get_random_context_fields(record['nl'], record['code'])
 
 
         fields = {'current_context': curr_context_field,
                   "prototype_context": prototype_context_field,
-                  # "random_context": random_context_field,
+                  "random_context": random_context_field,
                   'random_bleu': random_bleu_field,
                   'prototype_bleu': prototype_bleu_field,
                   "record_indices": MetadataField(index),
@@ -118,36 +131,50 @@ class JavaSearchDatasetReader(DatasetReader):
                   'current_record': MetadataField(record)
                  }
 
+        if self._use_code:
+            fields.update({
+                'current_code': curr_code_field,
+                'prototype_code': prototype_code_field,
+                'random_code': random_code_field,
+            })
+
         return Instance(fields)
 
-    def get_random_context_fields(self, curr_nl):
+    def get_random_context_fields(self, curr_nl, curr_code):
         fields = []
         bleus = []
+        codes = []
 
-        for i in range(NUM_PROTOTYPES):
-            rec = random.choice(self.train_dataset)
-            fields.append(self.get_context_field(rec['nl']))
-            bleus.append(self._get_bleu(curr_nl, rec['nl']))
+        for i in range(self._num_random):
+            random_rec = random.choice(self.train_dataset)
+            fields.append(self.get_context_field(random_rec['nl']))
+            codes.append(self.get_code_field(random_rec['code']))
+
+            bleus.append(self._get_bleu(curr_code, random_rec['code']))
 
         # print('Random bleus', bleus)
-        return NoCountListFieldBatch(fields), ArrayField(np.array(bleus))
+        return NoCountListFieldBatch(fields), NoCountListFieldBatch(codes), ArrayField(np.array(bleus))
 
     def get_prototype_context_fields(self, rec):
         fields = []
         bleus = []
+        codes = []
 
-        for i in range(NUM_PROTOTYPES):
-            protokey = 'prototype_nl' + str(i)
-            fields.append(self.get_context_field(rec[protokey]))
-            # if self._get_bleu(rec['nl'], rec[protokey]) == 1.0:
-                # print(rec[protokey])
-                # print(rec['code'])
-                # print(rec['prototype_code0'])
-            bleus.append(self._get_bleu(rec['nl'], rec[protokey]))
+        for i in range(self.NUM_PROTOTYPES):
+            fields.append(self.get_context_field(rec['prototype_nl' + str(i)]))
+            codes.append(self.get_code_field(rec['prototype_code'+ str(i)]))
+
+            bleus.append(self._get_bleu(rec['code'], rec['prototype_code'+ str(i)]))
 
         # print('Prototype bleus', bleus)
-        return NoCountListFieldBatch(fields), ArrayField(np.array(bleus))
+        return NoCountListFieldBatch(fields), NoCountListFieldBatch(codes), ArrayField(np.array(bleus))
 
+    def get_code_field(self, code):
+        preprocessed_code = [c for c in code if len(c) > 1][:75]
+
+        code_field = TextField([Token(t) for t in preprocessed_code],
+                                  self._utterance_indexers)
+        return code_field
     def get_context_field(self, utterance):
         # record['varNames'],
         # record['varTypes'],
@@ -196,8 +223,6 @@ class JavaSearchDatasetReader(DatasetReader):
         ngram_weights = [0.25] * min(4, len(gold_seq))
         return sentence_bleu([gold_seq], pred_seq, weights=ngram_weights, smoothing_function=sm.method3)
 
-    # def preprocess_code(self, code):
-    #     return [c for c in code if len(c) > 1][:75]
     # def return_stripped_rec(self, rec):
     #     # Saves memory by not keeping other keys
     #     new_rec = {'nl': rec['nl'],
@@ -250,12 +275,16 @@ class JavaSearchDatasetReader(DatasetReader):
         # todo(rajas): utterance indexer should be renamed to identifier indexer
         utterance_indexers = TokenIndexer.dict_from_params(params.pop('utterance_indexers'))
         num_dataset_instances = params.pop_int('num_dataset_instances', -1)
-        code_indexers = TokenIndexer.dict_from_params(params.pop('code_indexers'))
+        use_code = params.pop_bool('use_code', False)
+        num_random = params.pop_int('num_random', 3)
+        # code_indexers = TokenIndexer.dict_from_params(params.pop('code_indexers'))
 
         params.assert_empty(cls.__name__)
         return cls(utterance_indexers=utterance_indexers,
                    num_dataset_instances=num_dataset_instances,
                    # identifier_indexers=identifier_indexers,
-                   code_indexers=code_indexers,
+                   # code_indexers=code_indexers,
+                   use_code=use_code,
+                   num_random=num_random,
                    tokenizer=tokenizer,
                    lazy=lazy)
