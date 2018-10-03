@@ -73,12 +73,14 @@ class JavaSearchModel(Model):
                 current_context: Dict[str, torch.LongTensor],
                 prototype_context: Dict[str, torch.LongTensor],
                 record_indices: List[int],
-                # random_context: Dict[str, torch.LongTensor],
                 current_record: List[Dict[str, str]],
                 all_context: Dict[str, torch.LongTensor],
                 all_train_records: List[Dict[str, str]],
-                # code: Dict[str, torch.LongTensor] = None,
-                # all_code: Dict[str, torch.LongTensor] = None,
+
+                random_context: Dict[str, torch.LongTensor] = None,
+                random_bleu:torch.LongTensor = None,
+                prototype_bleu:torch.LongTensor = None,
+
                 ) -> Dict[str, torch.Tensor]:
 
         embedded_context = self._utterance_embedder(current_context)
@@ -90,17 +92,19 @@ class JavaSearchModel(Model):
         embedded_prototype_context = self._utterance_embedder(prototype_context, num_wrapping_dims=1)
         prototype_context_mask = get_text_field_mask(prototype_context, num_wrapping_dims=1)
 
-        contexts = []
-        for batch_index in range(batch_size):
-            temp_list = []
-            for i in range(num_prototypes):
-                random_num = random.randint(0, all_context['tokens'].size(0)-1)
-                while random_num == record_indices[batch_index]:
+        if random_context is None:
+            contexts = []
+            for batch_index in range(batch_size):
+                temp_list = []
+                for i in range(num_prototypes):
                     random_num = random.randint(0, all_context['tokens'].size(0)-1)
-                temp_list.append(all_context['tokens'][random_num])
-            contexts.append(torch.stack(temp_list))
+                    while random_num == record_indices[batch_index]:
+                        random_num = random.randint(0, all_context['tokens'].size(0)-1)
+                    temp_list.append(all_context['tokens'][random_num])
+                contexts.append(torch.stack(temp_list))
 
-        random_context = {'tokens': torch.stack(contexts)}
+            random_context = {'tokens': torch.stack(contexts)}
+
         embedded_random_context = self._utterance_embedder(random_context, num_wrapping_dims=1)
         random_context_mask = get_text_field_mask(random_context, num_wrapping_dims=1)
 
@@ -136,24 +140,40 @@ class JavaSearchModel(Model):
         final_encoded_prototype_context = final_encoded_prototype_context.view(batch_size, num_prototypes, final_dim)
         final_encoded_random_context = final_encoded_random_context.view(batch_size, num_prototypes, final_dim)
 
-        # print('final proto', final_encoded_prototype_context.size())
-        # print('final context', final_encoded_context.size())
+        # # Hyperbolic tangent
+        # final_encoded_context = F.tanh(final_encoded_context)
+        # final_encoded_prototype_context = F.tanh(final_encoded_prototype_context)
+        # final_encoded_random_context = F.tanh(final_encoded_random_context)
 
         # Shape: (batch_size, num_prototypes=3)
-        good_sim = F.cosine_similarity(final_encoded_context, final_encoded_prototype_context, dim=2)
-        bad_sim = F.cosine_similarity(final_encoded_context, final_encoded_random_context, dim=2)
-
-        good_dist = 1-good_sim
-        bad_dist = 1-bad_sim
-
+        proto_sim = F.cosine_similarity(final_encoded_context, final_encoded_prototype_context, dim=2)
+        random_sim = F.cosine_similarity(final_encoded_context, final_encoded_random_context, dim=2)
 
         outputs = {}
-        # margin = 0.05
-        # loss = (margin - good_sim + bad_sim).clamp(min=1e-6).mean()
-        # margin = 2.0
-        # loss = (margin - good_sim + bad_sim).mean()
+        if random_bleu is None:
+            good_dist = 1-proto_sim
+            bad_dist = 1-random_sim
+            # margin = 0.05
+            # loss = (margin - proto_sim + random_sim).clamp(min=1e-6).mean()
+            # margin = 2.0
+            # loss = (margin - proto_sim + random_sim).mean()
+            loss = (good_dist + (2-bad_dist)).clamp(min=1e-6).mean()
+        else:
+            # Map the bleus and similarities into the [0,2] range.
+            proto_sim_shifted = proto_sim + 1
+            random_sim_shifted = random_sim + 1
+            # print('=================')
+            # print(prototype_bleu)
+            # print(random_bleu)
+            prototype_bleu = prototype_bleu * 2
+            random_bleu = random_bleu * 2
 
-        loss = (good_dist + (2-bad_dist)).clamp(min=1e-6).sum()
+            # print(proto_sim_shifted)
+            good_diff = (proto_sim_shifted - prototype_bleu) ** 2
+            bad_diff = (random_sim_shifted - random_bleu) ** 2
+            # print(good_diff)
+            loss = (good_diff + bad_diff).clamp(min=1e-6).mean()
+
         outputs['loss'] = loss
 
         if not self.training:
@@ -176,23 +196,23 @@ class JavaSearchModel(Model):
                     preds = []
                     target_rec = current_record[batch_index]
                     for id in ids:
-                        # To verify the cosine similarities
-                        cos = scipy.spatial.distance.cosine(final_encoded_context_cpu[batch_index],
-                                                            encoded_all_context_cpu[id])
-
-                        print('Cosine dist verified per pred', cos)
-                        cossim = sklearn.metrics.pairwise.cosine_similarity(                                                       np.expand_dims(final_encoded_context_cpu[batch_index], axis=0),
-                                np.expand_dims(encoded_all_context_cpu[id], axis=0)
-                        )
-
-                        print('Cosine sim verified per pred', cossim)
-                        normed1 = encoded_all_context_cpu[id] /np.linalg.norm(encoded_all_context_cpu[id])
-                        normed2 = final_encoded_context_cpu[batch_index] /np.linalg.norm(final_encoded_context_cpu[batch_index])
-                        print(np.linalg.norm(encoded_all_context_cpu[id]))
-                        print(np.linalg.norm(final_encoded_context_cpu[batch_index]))
-                        print('normed1', normed1)
-                        print('normed2', normed2)
-                        print('doted', np.dot(normed1, normed2))
+                        # # To verify the cosine similarities
+                        # cos = scipy.spatial.distance.cosine(final_encoded_context_cpu[batch_index],
+                        #                                     encoded_all_context_cpu[id])
+                        #
+                        # print('Cosine dist verified per pred', cos)
+                        # cossim = sklearn.metrics.pairwise.cosine_similarity(                                                       np.expand_dims(final_encoded_context_cpu[batch_index], axis=0),
+                        #         np.expand_dims(encoded_all_context_cpu[id], axis=0)
+                        # )
+                        #
+                        # print('Cosine sim verified per pred', cossim)
+                        # normed1 = encoded_all_context_cpu[id] /np.linalg.norm(encoded_all_context_cpu[id])
+                        # normed2 = final_encoded_context_cpu[batch_index] /np.linalg.norm(final_encoded_context_cpu[batch_index])
+                        # print(np.linalg.norm(encoded_all_context_cpu[id]))
+                        # print(np.linalg.norm(final_encoded_context_cpu[batch_index]))
+                        # # print('normed1', normed1)
+                        # # print('normed2', normed2)
+                        # print('doted', np.dot(normed1, normed2))
 
                         pred = all_train_records[0][id]
                         preds.append(pred)
@@ -205,12 +225,12 @@ class JavaSearchModel(Model):
 
                     # Add the best bleu to metrics
                     self._code_bleu(bleus[0])
-                    # print('Final encoded context', final_encoded_context_cpu[batch_index])
-                    # print('Final encoded context', encoded_all_context_cpu[batch_index])
+                    # Cosine distance to best prototype
+                    model_dist = 1-proto_sim[batch_index].data.cpu().numpy().tolist()[0]
                     self._log_predictions(rec_target=target_rec,
                                           preds=preds,
                                           bleus=bleus,
-                                          model_dist=good_dist[batch_index].data.cpu().numpy().tolist(),
+                                          model_dist=model_dist,
                                           distances=distances)
 
 
@@ -390,7 +410,7 @@ class JavaSearchModel(Model):
 
         log += 'Best Prototype Target========\n'
         # log += rec_target['path'] + '\n'
-        log += 'Sim ' + str(model_dist[0]) + '\n'
+        log += 'Sim ' + str(model_dist) + '\n'
         log += 'NL:' + ' '.join(rec_target['prototype_nl0']) + '\n'
         log += self.indent(rec_target['prototype_code0']) + '\n'
 
@@ -458,12 +478,6 @@ class JavaSearchModel(Model):
             except:
                 pass
         return code
-
-    def _get_rules_from_action_history(self, action_history: List[int], actions: List[ProductionRuleArray]):
-        rules = []
-        for a in action_history:
-            rules.append(actions[a][0])
-        return rules
 
     def indent(self, code):
         newlists = [[]]

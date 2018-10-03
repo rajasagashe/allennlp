@@ -23,22 +23,11 @@ from allennlp.data.tokenizers import Token, Tokenizer, WordTokenizer
 # from java_programmer.fields import JavaProductionRuleField, JavaGlobalProductionRuleField, ProductionRuleField
 from allennlp.semparse import KnowledgeGraph
 from nltk.corpus import stopwords
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
-IdentifierNT = 'IdentifierNT'
-IdentifierOther = IdentifierNT + 'Other'
-# LITERALS_TO_TRIM = [IdentifierNT, "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
-IDENTIFIER_TYPES = ['Primary', 'ClassOrInterfaceType', 'Nt_33']
 
-# todo(pr): Literals to trim shouoldn't have the modified identifier types or
-# at least should have an if else allowing the modified vs normal IdentifierNT to be selected
-LITERALS_TO_TRIM = [IdentifierNT, IdentifierNT+IDENTIFIER_TYPES[0], IdentifierNT+IDENTIFIER_TYPES[1], IdentifierNT+IDENTIFIER_TYPES[2], IdentifierOther, "Nt_decimal_literal", "Nt_char_literal",   "Nt_float_literal", "Nt_hex_literal", "Nt_oct_literal"]
-UNK = '<UNK>'
-DUMMY = '<DUMMY>'
-PLAIN_IDENTIFIER_RULE = "<SOME_NAME>-->" + "<SOME_NAME>"
-STOPS = set(stopwords.words("english"))
-RULES_FILE = os.path.join('debug/', 'grammar_rules.txt')
-
+NUM_PROTOTYPES = 3
 @DatasetReader.register("java_search")
 class JavaSearchDatasetReader(DatasetReader):
     def __init__(self,
@@ -87,7 +76,7 @@ class JavaSearchDatasetReader(DatasetReader):
         # Very important that train_dataset is used here since during validation the
         # best context from train is used not validation!
         for rec in self.train_dataset:
-            contexts.append(self.get_context_field(rec))
+            contexts.append(self.get_context_field(rec['nl']))
         all_context_field = NoCountListField(contexts)
 
         all_train_records = MetadataField(self.train_dataset)
@@ -113,15 +102,16 @@ class JavaSearchDatasetReader(DatasetReader):
                          all_train_records=None,
                          ) -> Instance:
 
-        curr_context_field = self.get_context_field(record)
-        prototype_context_field = self.get_prototype_context_fields(record)
-        # correct_context_field = self.get_context_field(record)
-        # random_context_field = self.get_context_field(random_record)
-        # preprocessed_code = self.preprocess_code(record['code'])
-        # code_field = TextField([Token(c) for c in preprocessed_code], self._code_indexers)
+        curr_context_field = self.get_context_field(record['nl'])
+        prototype_context_field, prototype_bleu_field = self.get_prototype_context_fields(record)
+        random_context_field, random_bleu_field = self.get_random_context_fields(record['nl'])
+
 
         fields = {'current_context': curr_context_field,
                   "prototype_context": prototype_context_field,
+                  # "random_context": random_context_field,
+                  'random_bleu': random_bleu_field,
+                  'prototype_bleu': prototype_bleu_field,
                   "record_indices": MetadataField(index),
                   'all_context': all_context_field,
                   'all_train_records': all_train_records,
@@ -130,33 +120,35 @@ class JavaSearchDatasetReader(DatasetReader):
 
         return Instance(fields)
 
+    def get_random_context_fields(self, curr_nl):
+        fields = []
+        bleus = []
+
+        for i in range(NUM_PROTOTYPES):
+            rec = random.choice(self.train_dataset)
+            fields.append(self.get_context_field(rec['nl']))
+            bleus.append(self._get_bleu(curr_nl, rec['nl']))
+
+        # print('Random bleus', bleus)
+        return NoCountListFieldBatch(fields), ArrayField(np.array(bleus))
+
     def get_prototype_context_fields(self, rec):
         fields = []
-        for i in range(3):
-            proto_rec = {'nl': rec['prototype_nl' + str(i)]}
-            fields.append(self.get_context_field(proto_rec))
-        return NoCountListFieldBatch(fields)
+        bleus = []
 
-    def preprocess_code(self, code):
-        return [c for c in code if len(c) > 1][:75]
+        for i in range(NUM_PROTOTYPES):
+            protokey = 'prototype_nl' + str(i)
+            fields.append(self.get_context_field(rec[protokey]))
+            # if self._get_bleu(rec['nl'], rec[protokey]) == 1.0:
+                # print(rec[protokey])
+                # print(rec['code'])
+                # print(rec['prototype_code0'])
+            bleus.append(self._get_bleu(rec['nl'], rec[protokey]))
 
+        # print('Prototype bleus', bleus)
+        return NoCountListFieldBatch(fields), ArrayField(np.array(bleus))
 
-    def return_stripped_rec(self, rec):
-        # Saves memory by not keeping other keys
-        new_rec = {'nl': rec['nl'],
-                'code': rec['code'],
-                'method_name': rec['methodName'],
-                'class_name': rec['className'],
-                'path': rec['path'],
-                }
-        if 'orig_code' in rec:
-            tokenized = RegexpTokenizer(r'\w+').tokenize(rec['orig_code'])
-            new_rec.update({'orig_code': rec['orig_code'],
-                            'orig_code_split': tokenized})
-        return new_rec
-
-    def get_context_field(self, record):
-        utterance = record['nl']
+    def get_context_field(self, utterance):
         # record['varNames'],
         # record['varTypes'],
         # record['methodNames'],
@@ -195,6 +187,30 @@ class JavaSearchDatasetReader(DatasetReader):
 
         context_field = TextField([Token(t) for t in context_lst], self._utterance_indexers)
         return context_field
+
+
+    @staticmethod
+    def _get_bleu(gold_seq, pred_seq):
+        # This is how Ling et al. compute bleu score.
+        sm = SmoothingFunction()
+        ngram_weights = [0.25] * min(4, len(gold_seq))
+        return sentence_bleu([gold_seq], pred_seq, weights=ngram_weights, smoothing_function=sm.method3)
+
+    # def preprocess_code(self, code):
+    #     return [c for c in code if len(c) > 1][:75]
+    # def return_stripped_rec(self, rec):
+    #     # Saves memory by not keeping other keys
+    #     new_rec = {'nl': rec['nl'],
+    #             'code': rec['code'],
+    #             'method_name': rec['methodName'],
+    #             'class_name': rec['className'],
+    #             'path': rec['path'],
+    #             }
+    #     if 'orig_code' in rec:
+    #         tokenized = RegexpTokenizer(r'\w+').tokenize(rec['orig_code'])
+    #         new_rec.update({'orig_code': rec['orig_code'],
+    #                         'orig_code_split': tokenized})
+    #     return new_rec
 
     @staticmethod
     def split_rule(rule):
