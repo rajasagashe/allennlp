@@ -1,5 +1,6 @@
 import json
 from typing import Tuple
+import os
 
 from overrides import overrides
 
@@ -22,7 +23,7 @@ class JavaParserPredictor(Predictor):
 
 
         # todo(pr): change file paths
-        file_path = "/home/rajas/semparse/java-programmer/data/added-path-methodname/train-with-edits.json"
+        file_path = "/home/rajas/final/data/official/train.dataset"
         extra_file_path = "/home/rajas/semparse/java-programmer/data/added-path-methodname/extra-fromtrain-with-edits.json"
 
 
@@ -52,19 +53,101 @@ class JavaParserPredictor(Predictor):
         #             break
 
 
-        with open(extra_file_path) as dataset_file:
-            p2methods = json.load(dataset_file)
-        self.extra_dataset = []
-        for _, methods in p2methods.items():
-            self.extra_dataset += methods
+        # with open(extra_file_path) as dataset_file:
+        #     p2methods = json.load(dataset_file)
+        # self.extra_dataset = []
+        # for _, methods in p2methods.items():
+        #     self.extra_dataset += methods
 
-        # modified_rules = self._dataset_reader.split_identifier_rule_into_multiple(
-        #     [d['rules'] for d in train_dataset]
-        # )
+        with open(file_path) as f:
+            dataset = json.load(f)
+            if dataset_reader._num_dataset_instances != -1:
+                dataset = dataset[:dataset_reader._num_dataset_instances]
 
-        # self.global_production_rule_fields, self.global_rule2index = self._dataset_reader.get_global_rule_fields(modified_rules)
+        modified_rules = dataset_reader.split_identifier_rule_into_multiple([d['rules'] for d in dataset])
+        nonterminal2rules = dataset_reader.get_nonterminal_to_rules_trimmed(modified_rules)
+
+        # Cache the global rule set
+        self.global_production_rule_fields, self.global_rule_set = dataset_reader.get_global_rule_fields(
+            nonterminal2rules)
 
 
+    # @overrides
+    # def _json_to_instance(self, json_dict: JsonDict) -> Tuple[Instance, JsonDict]:
+    #     """
+    #     Expects JSON that looks like ``{"question": "...", "table": "..."}``.
+    #     The format of the table string is:
+    #         methodNames parseDetails submit ...
+    #         variableNames isReady counter ...
+    #     """
+    #     print('json dict')
+    #     print(json_dict)
+    #     table_text = json_dict["table"]
+    #
+    #     # utterance_text = json_dict["question"]
+    #     # java_class = {'variable_names': [],
+    #     #               'variable_types': [],
+    #     #               'method_names': [],
+    #     #               'method_types': []}
+    #     #
+    #     # class_category = ''
+    #
+    #
+    #
+    #     lst = table_text.split('\n')
+    #     methodName = lst[0]
+    #     path = lst[1]
+    #
+    #     for record in self.extra_dataset:
+    #         if (record['methodName'] == methodName and
+    #                     record['path'] == path):
+    #             break
+    #
+    #     # modified_targ_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['rules']])
+    #     modified_proto_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['prototype_rules']])
+    #
+    #     #
+    #     # for rules in modified_proto_rules:
+    #     #     for i, rule in enumerate(rules):
+    #     #         # lhs, rhs = rule.split('-->')
+    #     #         # No class field/func identifier rules since these cannot be embedded
+    #     #         if rule not in self.global_rule2index:
+    #     #             rules[i] = PLAIN_IDENTIFIER_RULE
+    #
+    #     if len(lst) > 2:
+    #         print("LSt is ", lst)
+    #         proto_nl = lst[2].split()
+    #         nl = lst[3].split()
+    #         record['prototype_nl'] = proto_nl  # ['API', 'level', '8']
+    #         record['nl'] = nl  # ['API', 'level', '9']
+    #
+    #     print(record['methodNames'])
+    #
+    #     # print('Natural Language')
+    #     # print(record['prototype_nl'])
+    #     # print(record['nl'])
+    #     instance = self._dataset_reader.text_to_instance(record['nl'],
+    #                                                      record['varNames'],
+    #                                                      record['varTypes'],
+    #                                                      record['methodNames'],
+    #                                                      record['methodReturns'],
+    #
+    #                                                      rules=None,
+    #                                                      proto_rules=modified_proto_rules[0],
+    #                                                      proto_tokens=record['prototype_nl'],
+    #                                                      proto_code=record['prototype_code'],
+    #                                                      proto_og_rules=record['prototype_rules'],
+    #                                                      protoMethodName=record['prototype_methodName'],
+    #                                                      methodName=record['methodName'],
+    #                                                      # code=record['code'],
+    #                                                      code=None,
+    #                                                      path=record['path'])
+    #     # print("Processed tokens", instance.fields['metadata'].metadata['utterance'])
+    #     # todo(pr): figure out why question tokens is so weird??!!!
+    #     print('QUestion tokens!!!', instance.fields['metadata'].metadata)
+    #     extra_info = {'question_tokens': instance.fields['metadata'].metadata['utterance'],
+    #                   'prototype_rules': modified_proto_rules[0]}  # record['nl']}
+    #     return instance, extra_info
 
     @overrides
     def _json_to_instance(self, json_dict: JsonDict) -> Tuple[Instance, JsonDict]:
@@ -74,65 +157,49 @@ class JavaParserPredictor(Predictor):
             methodNames parseDetails submit ...
             variableNames isReady counter ...
         """
+
         table_text = json_dict["table"]
 
-        # utterance_text = json_dict["question"]
-        # java_class = {'variable_names': [],
-        #               'variable_types': [],
-        #               'method_names': [],
-        #               'method_types': []}
-        #
-        # class_category = ''
+        utterance_text = json_dict["question"]
+        java_class = {'variable_names': [],
+                      'variable_types': [],
+                      'method_names': [],
+                      'method_types': []}
 
-        lst = table_text.split('\n')
-        methodName = lst[0]
-        path = lst[1]
+        class_category = ''
 
-        for record in self.extra_dataset:
-            if (record['methodName'] == methodName and
-                        record['path'] == path):
-                break
+        # lst = table_text.split('\n')
+        # methodName = lst[0]
+        # path = lst[1]
 
-        # modified_targ_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['rules']])
-        modified_proto_rules = self._dataset_reader.split_identifier_rule_into_multiple([record['prototype_rules']])
-
-        #
-        # for rules in modified_proto_rules:
-        #     for i, rule in enumerate(rules):
-        #         # lhs, rhs = rule.split('-->')
-        #         # No class field/func identifier rules since these cannot be embedded
-        #         if rule not in self.global_rule2index:
-        #             rules[i] = PLAIN_IDENTIFIER_RULE
-
-        if len(lst) > 2:
-            proto_nl = lst[2].split()
-            nl = lst[3].split()
-            record['prototype_nl'] = proto_nl  # ['API', 'level', '8']
-            record['nl'] = nl  # ['API', 'level', '9']
+        for row_index, line in enumerate(table_text.split('\n')):
+            line = line.rstrip('\n')
+            if ':' in line:
+                class_category = line
+            else:
+                if class_category != '':
+                    name, type = line.split('(')
+                    type = type.split(')')[0]
+                    if class_category == 'Variables:':
+                        java_class['variable_names'].append(name)
+                        java_class['variable_types'].append(type)
+                    else:
+                        java_class['method_names'].append(name)
+                        java_class['method_types'].append(type)
 
 
-        print('Natural Language')
-        print(record['prototype_nl'])
-        print(record['nl'])
-        instance = self._dataset_reader.text_to_instance(record['nl'],
-                                                         record['varNames'],
-                                                         record['varTypes'],
-                                                         record['methodNames'],
-                                                         record['methodReturns'],
+        instance = self._dataset_reader.text_to_instance(utterance_text.split(),
+                                                         java_class['variable_names'],
+                                                         java_class['variable_types'],
+                                                         java_class['method_names'],
+                                                         java_class['method_types'],
+                                                         global_rule_fields=self.global_production_rule_fields,
+                                                         global_rule_set=self.global_rule_set,
+                                                         rules=None)
 
-                                                         rules=None,
-                                                         proto_rules=modified_proto_rules[0],
-                                                         proto_tokens=record['prototype_nl'],
-                                                         proto_code=record['prototype_code'],
-                                                         proto_og_rules=record['prototype_rules'],
-                                                         protoMethodName=record['prototype_methodName'],
-                                                         methodName=record['methodName'],
-                                                         # code=record['code'],
-                                                         code=None,
-                                                         path=record['path'])
-        print("Processed tokens", instance.fields['metadata'].metadata['utterance'])
+        # print('QUestion tokens!!!', instance.fields['metadata'].metadata)
         extra_info = {'question_tokens': instance.fields['metadata'].metadata['utterance'],
-                      'prototype_rules': modified_proto_rules[0]}  #record['nl']}
+                      'prototype_rules': [""]}  #record['nl']}
         return instance, extra_info
 
     @overrides

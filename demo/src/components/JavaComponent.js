@@ -278,9 +278,9 @@ class JavaOutput extends React.Component {
                 ))}
               </Collapsible>
 
-              {/*<Collapsible trigger="Entity linking scores">*/}
-                  {/*<HeatMap xLabels={question_tokens} yLabels={entities} data={linking_scores} xLabelWidth="250px" />*/}
-              {/*</Collapsible>*/}
+              <Collapsible trigger="Entity linking scores">
+                  <HeatMap xLabels={question_tokens} yLabels={entities} data={linking_scores} xLabelWidth="250px" />
+              </Collapsible>
 
 
             {/*{feature_scores &&*/}
@@ -430,17 +430,6 @@ class _JavaComponent extends React.Component {
       console.log("entities ", entities );
       console.log("question_tokens ", question_tokens );
       console.log("prototype_rules ", prototype_rules );
-
-
-
-
-
-
-
-
-
-
-
 
       // console.log("table ", tabl
         // ", prototype_rules );

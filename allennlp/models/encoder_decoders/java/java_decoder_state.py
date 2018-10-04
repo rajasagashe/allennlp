@@ -13,9 +13,10 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                  score: List[torch.Tensor],
                  rnn_state: List[RnnState],
                  grammar_states: List[JavaGrammarState],
-                 nonterminal2actions: Dict[str, List[str]],
-                 nonterminal2action_embeddings: Dict[str, torch.Tensor],
-                 nonterminal2action2index: Dict[str, torch.Tensor],
+                 nt2global_actions: Dict[str, List[str]],
+                 linking_actions:List[Dict[str, Tuple]],
+                 nt2global_action_embeddings: Dict[str, torch.Tensor],
+                 nt2action2index: Dict[str, torch.Tensor],
                  should_copy_identifiers: bool,
                  copy_identifier_embeddings:List[torch.Tensor] = None,
                  copy_identifier_actions: List[List[str]] = None,
@@ -30,15 +31,16 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         super(JavaDecoderState, self).__init__(batch_indices, action_history, score)
         self.rnn_state = rnn_state
         self.grammar_states = grammar_states
-        self.nonterminal2actions = nonterminal2actions
-        self.nonterminal2action_embeddings = nonterminal2action_embeddings
-        self.nonterminal2action2index = nonterminal2action2index
+        self.nt2global_actions = nt2global_actions
+        self.nt2global_action_embeddings = nt2global_action_embeddings
+        self.nt2action2index = nt2action2index
+        self.linking_actions = linking_actions
         # self.flattened_linking_scores = flattened_linking_scores
         # self.actions_to_entities = actions_to_entities
 
         self.should_copy_identifiers = should_copy_identifiers
-        self.copy_identifier_actions = copy_identifier_actions
-        self.copy_identifier_embeddings = copy_identifier_embeddings
+        # self.copy_identifier_actions = copy_identifier_actions
+        # self.copy_identifier_embeddings = copy_identifier_embeddings
 
         self.debug_info = debug_info
         # self.proto_actions = proto_actions
@@ -50,23 +52,34 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                 a list of embeddings for those valid actions
         """
         # nonterminals = [state.get_current_nonterminal() for state in self.grammar_states]
-        # actions = [self.nonterminal2actions[nt] for nt in nonterminals]
-        # embeddings = [self.nonterminal2action_embeddings[nt] for nt in nonterminals]
+        # actions = [self.nt2global_actions[nt] for nt in nonterminals]
+        # embeddings = [self.nt2global_action_embeddings[nt] for nt in nonterminals]
         # for i in range(self.batch_indices):
         # return actions, embeddings
 
         nt = self.grammar_states[group_index].get_current_nonterminal()
-        actions = self.nonterminal2actions[nt]
-        embeddings = self.nonterminal2action_embeddings[nt]
+        actions = self.nt2global_actions[nt]
+        embeddings = self.nt2global_action_embeddings[nt]
+
+
+        if self.should_copy_identifiers and nt in ['IdentifierNTPrimary',
+                                                   'IdentifierNTClassOrInterfaceType',
+                                                   'IdentifierNTNt_33']:
+            # todo what do if class has no methods/fields so no linked actions
+            # I think key error will be thrown
+            nt2actions, nt2scores = self.linking_actions[group_index][nt]
+            assert len(nt2actions) > 0
+            return actions, embeddings, nt2actions, nt2scores
+
         # print('actions', nt, actions[:2])
         # print('embeddings', embeddings)
 
-        copy_actions = None
-        copy_embeddings = None
-        if self.should_copy_identifiers and nt == 'IdentifierNT':
-            copy_actions = self.copy_identifier_actions[group_index]
-            copy_embeddings = self.copy_identifier_embeddings[group_index]
-        return actions, embeddings, copy_actions, copy_embeddings
+        # copy_actions = None
+        # copy_embeddings = None
+        # if self.should_copy_identifiers and nt == 'IdentifierNT':
+        #     copy_actions = self.copy_identifier_actions[group_index]
+        #     copy_embeddings = self.copy_identifier_embeddings[group_index]
+        return actions, embeddings, None, None
 
     # @timeit
     def new_state_from_group_index(self,
@@ -95,23 +108,26 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
             new_debug_info = None
 
         if self.should_copy_identifiers:
-            new_copy_identifier_actions=[self.copy_identifier_actions[group_index]]
-            new_copy_identifier_embeddings=[self.copy_identifier_embeddings[group_index]]
+            new_linking_actions = [self.linking_actions[group_index]]
+            # new_copy_identifier_actions=[self.copy_identifier_actions[group_index]]
+            # new_copy_identifier_embeddings=[self.copy_identifier_embeddings[group_index]]
         else:
-            new_copy_identifier_actions = None
-            new_copy_identifier_embeddings = None
+            new_linking_actions = None
+            # new_copy_identifier_actions = None
+            # new_copy_identifier_embeddings = None
 
         return JavaDecoderState(batch_indices=[batch_index],
                                 action_history=[new_action_history],
                                 score=[new_score],
                                 rnn_state=[new_rnn_state],
                                 grammar_states=[new_grammar_state],
-                                nonterminal2actions=self.nonterminal2actions,
-                                nonterminal2action_embeddings=self.nonterminal2action_embeddings,
-                                nonterminal2action2index=self.nonterminal2action2index,
+                                nt2global_actions=self.nt2global_actions,
+                                nt2global_action_embeddings=self.nt2global_action_embeddings,
+                                nt2action2index=self.nt2action2index,
+                                linking_actions=new_linking_actions,
                                 should_copy_identifiers=self.should_copy_identifiers,
-                                copy_identifier_actions=new_copy_identifier_actions,
-                                copy_identifier_embeddings=new_copy_identifier_embeddings,
+                                # copy_identifier_actions=new_copy_identifier_actions,
+                                # copy_identifier_embeddings=new_copy_identifier_embeddings,
                                 debug_info=new_debug_info)
 
     def is_finished(self) -> bool:
@@ -128,11 +144,13 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
         grammar_states = [grammar_state for state in states for grammar_state in state.grammar_states]
 
         if states[0].should_copy_identifiers:
-            copy_identifier_actions = [copy_identifier_action for state in states for copy_identifier_action in state.copy_identifier_actions]
-            copy_identifier_embeddings = [copy_identifier_embedding for state in states for copy_identifier_embedding in state.copy_identifier_embeddings]
+            # copy_identifier_actions = [copy_identifier_action for state in states for copy_identifier_action in state.copy_identifier_actions]
+            # copy_identifier_embeddings = [copy_identifier_embedding for state in states for copy_identifier_embedding in state.copy_identifier_embeddings]
+            linking_actions = [la for state in states for la in state.linking_actions]
         else:
-            copy_identifier_actions = None
-            copy_identifier_embeddings = None
+            # copy_identifier_actions = None
+            # copy_identifier_embeddings = None
+            linking_actions = None
 
         # proto_actions = [proto_actions for state in states for proto_actions in state.proto_actions]
         # proto_actions_mask = [proto_mask for state in states for proto_mask in state.proto_mask]
@@ -148,13 +166,14 @@ class JavaDecoderState(DecoderState['JavaDecoderState']):
                                 action_history=action_histories,
                                 score=scores,
                                 rnn_state=rnn_state,
-                                nonterminal2actions=states[0].nonterminal2actions,
-                                nonterminal2action_embeddings=states[0].nonterminal2action_embeddings,
-                                nonterminal2action2index=states[0].nonterminal2action2index,
+                                nt2global_actions=states[0].nt2global_actions,
+                                nt2global_action_embeddings=states[0].nt2global_action_embeddings,
+                                nt2action2index=states[0].nt2action2index,
+                                linking_actions=linking_actions,
                                 grammar_states=grammar_states,
                                 should_copy_identifiers=states[0].should_copy_identifiers,
-                                copy_identifier_actions=copy_identifier_actions,
-                                copy_identifier_embeddings=copy_identifier_embeddings,
+                                # copy_identifier_actions=copy_identifier_actions,
+                                # copy_identifier_embeddings=copy_identifier_embeddings,
                                 # flattened_linking_scores=states[0].flattened_linking_scores,
                                 # actions_to_entities=states[0].actions_to_entities,
                                 # proto_actions=proto_actions,

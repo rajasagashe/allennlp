@@ -119,6 +119,7 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
                 "neighbor_exact_match",
                 "neighbor_contains_exact_match",
                 "neighbor_substring_token_match_larger_than_three"
+                "is_field"
                 # 'lemma_match',
                 # 'contains_lemma_match',
                 # 'edit_distance',
@@ -276,14 +277,25 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
     # https://github.com/allenai/pnp/blob/wikitables2/src/main/scala/org/allenai/wikitables/SemanticParserFeatureGenerator.scala
     # pylint: disable=unused-argument,no-self-use
 
-    def _is_in_prototype(self,
-                           entity: str,
-                           entity_text: List[Token],
-                           token: Token,
-                           token_index: int,
-                           tokens: List[Token]) -> float:
-        # todo(rajas) verify this function
-        if entity in self.knowledge_graph.entity2in_prototype:
+    # def _is_in_prototype(self,
+    #                        entity: str,
+    #                        entity_text: List[Token],
+    #                        token: Token,
+    #                        token_index: int,
+    #                        tokens: List[Token]) -> float:
+    #     # todo(rajas) verify this function
+    #     if entity in self.knowledge_graph.entity2in_prototype:
+    #         return 1.0
+    #     return 0.0
+
+    def _is_field(self,
+                   entity: str,
+                   entity_text: List[Token],
+                   token: Token,
+                   token_index: int,
+                   tokens: List[Token]) -> float:
+        # 1.0 if its a field, 0.0 if its a function
+        if 'concodeclass_' in entity:
             return 1.0
         return 0.0
 
@@ -305,6 +317,8 @@ class KnowledgeGraphField(Field[Dict[str, torch.Tensor]]):
                                     token: Token,
                                     token_index: int,
                                     tokens: List[Token]) -> float:
+
+        # print(token.text, self._entity_text_exact_text[entity], print(entity    ))
         if token.text in self._entity_text_exact_text[entity]:
             return 1.0
         return 0.0
