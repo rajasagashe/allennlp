@@ -117,7 +117,8 @@ def get_nl_tokens(rec, nl_len):
     towards the correct proto1 by using method names as well.
     """
     nl_split = [t2 for t in rec['nl'] for t2 in split_camel_case(t)]
-    tokens = split_camel_case(rec['methodName']) + nl_split #rec['nl']
+    # tokens = split_camel_case(rec['methodName']) + nl_split #rec['nl']
+    tokens = nl_split
 
     tokens = [t for t in tokens if t not in STOPS]
 
@@ -221,7 +222,7 @@ def filter_out_tests(class2methods):
 #     return dataset
 
 
-def add_prototype_in_rec(rec, proto_rec, i, dataset_index):
+def add_prototype_in_rec(rec, proto_rec, i, dataset_index, bleu=None, jaccard=None):
     # rec['prototype_nl' + str(i)] = proto_rec['nl']
     # rec['prototype_code' + str(i)] = proto_rec['code']
     # rec['prototype_methodName' + str(i)] = proto_rec['methodName']
@@ -229,16 +230,31 @@ def add_prototype_in_rec(rec, proto_rec, i, dataset_index):
     # rec['prototype_path' + str(i)] = proto_rec['path']
 
     # For the new dataset:
-    rec['prototype_nlToks' + str(i)] = proto_rec['nlToks']
+    rec['prototype_nl' + str(i)] = proto_rec['nl']
+    rec['prototype_originalCode' + str(i)] = proto_rec['originalCode']
     rec['prototype_code' + str(i)] = proto_rec['code']
-    rec['prototype_renamed' + str(i)] = proto_rec['renamed']
     # rec['prototype_methodName' + str(i)] = proto_rec['methodName']
     # rec['prototype_rules' + str(i)] = proto_rec['rules']
     rec['prototype_repo' + str(i)] = proto_rec['repo']
     rec['prototype_className' + str(i)] = proto_rec['className']
 
     rec['prototype_datasetIndex' + str(i)] = dataset_index
+    if bleu is not None:
+        rec['prototype_bleu' + str(i)] = bleu
+    if jaccard is not None:
+        rec['prototype_jaccard' + str(i)] = jaccard
 
+def are_recs_same_class(rec1, rec2):
+    return (#rec1['className'] == rec2['className'] and
+            rec1['repo'] == rec2['repo']
+        #     rec1['methodNames'] == rec2['methodNames'] and
+        #     rec1['varNames'] == rec2['varNames'] and
+        # rec1['methodReturns'] == rec2['methodReturns'] and
+        # rec1['varTypes'] == rec2['varTypes']
+            )
+    # return (rec1['repo'] == rec2['repo'] and
+    #         rec1['className'] == rec2['className'] and
+    #         rec1['methodNames'] == rec2['methodNames'])
 
 def pair_oracle_best_train_bleu_lsh(dataset,
                                     proto_cand_dataset=None,
@@ -251,10 +267,9 @@ def pair_oracle_best_train_bleu_lsh(dataset,
         proto_cand_dataset = dataset
 
     forest = MinHashLSHForest(num_perm=128)
-
     for i, method in enumerate(tqdm(proto_cand_dataset)):
         m1 = MinHash(num_perm=128)
-        for d in method['code']:
+        for d in method['originalCode']:
             m1.update(d.encode('utf8'))
         forest.add(str(i), m1)
     forest.index()
@@ -262,33 +277,27 @@ def pair_oracle_best_train_bleu_lsh(dataset,
     total_bleu = 0.0
     for i, method in enumerate(tqdm(dataset)):
         m1 = MinHash(num_perm=128)
-        for d in method['code']:
+        for d in method['originalCode']:
             m1.update(d.encode('utf8'))
         result = forest.query(m1, num_candidates)
-
-        best_index = i
-        best_bleu = 0.0
 
         bleus = []
         dataset_indices = []
         for index_str in result:
             index = int(index_str)
-            if index != i:
+            # This index != i shouldn't be there for when dataset is validation since
+            # the candidate will be train and hence records at the same index aren't the same
+            if index != i and not are_recs_same_class(method, proto_cand_dataset[index]):
                 bleu = get_bleu(gold_seq=method['code'],
                                 pred_seq=proto_cand_dataset[index]['code'])
-                # bleu_indices.append((bleu, index))
                 bleus.append(bleu)
                 dataset_indices.append(index)
-                # if bleu > best_bleu:
-                #     best_bleu = bleu
-                #     best_index = index
 
         if len(bleus) < 3:
             print("Omitted Method due to no neighbors MinHash!!!!")
             continue
 
-        # print(bleus)
-        # print(dataset_indices)
+        # todo this logic is same as Jaccard method so refactor
         top_num = 3
         bleu_array = np.array(bleus)
         top_indices = np.argpartition(bleu_array, -top_num)[-top_num:]
@@ -298,6 +307,7 @@ def pair_oracle_best_train_bleu_lsh(dataset,
 
 
         for i, cand_index in enumerate(sorted_top_indices):
+            bleu = bleus[cand_index]
             dataset_index = dataset_indices[cand_index]
             method2 = proto_cand_dataset[dataset_index]
 
@@ -306,7 +316,8 @@ def pair_oracle_best_train_bleu_lsh(dataset,
                 total_bleu += get_bleu(gold_seq=method['code'],
                                        pred_seq=method2['code'])
 
-            add_prototype_in_rec(rec=method, proto_rec=method2, i=i, dataset_index=cand_index)
+            add_prototype_in_rec(rec=method, proto_rec=method2, i=i, dataset_index=dataset_index,
+                                 bleu=bleu)
     print(total_bleu / len(dataset), "bleu Oracle, from train")
 
 def pair_oracle_best_bleu_in_class(dataset):
@@ -360,29 +371,57 @@ def pair_jaccard_nl_from_train_lsh(dataset, proto_cand_dataset=None, nl_len=25):
         nl = get_nl_tokens(method, nl_len)
         for d in nl:
             m1.update(d.encode('utf8'))
-        result = forest.query(m1, 50)
+        result = forest.query(m1, 200)
 
-        best_index = i
-        best_jaccard = 0.0
+        # best_index = i
+        # best_jaccard = 0.0
+        jaccards = []
+        dataset_indices = []
         for index_str in result:
             index = int(index_str)
-            if index != i:
+            if index != i and not are_recs_same_class(method, proto_cand_dataset[index]):
                 tgt = get_nl_tokens(proto_cand_dataset[index], nl_len)
                 jaccard = jaccard_similarity_score(nl, tgt)
-                if jaccard > best_jaccard:
-                    best_jaccard = jaccard
-                    best_index = index
+                # if jaccard > best_jaccard:
+                #     best_jaccard = jaccard
+                #     best_index = index
+                jaccards.append(jaccard)
+                dataset_indices.append(index)
 
-        if best_index == i:
-            # print(i, result)
-            best_index = random.randint(0, len(dataset))
-            # print(method['nl'])
-            # print(method['code'])
+        if len(jaccards) < 3:
+            for i in range(3 - len(jaccards)):
+                rand_index = random.randint(0, len(proto_cand_dataset)-1)
+                dataset_indices.append(rand_index)
+                tgt = get_nl_tokens(proto_cand_dataset[rand_index], nl_len)
+                jaccards.append(jaccard_similarity_score(nl, tgt))
+                print("Randomly picking method due to no neighbors MinHash!!!!")
 
-        method2 = proto_cand_dataset[best_index]
-        total_bleu += get_bleu(gold_seq=method['code'],
-                               pred_seq=method2['code'])
-        add_prototype_in_rec(rec=method, proto_rec=method2)
+        top_num = 3
+        jaccard_array = np.array(jaccards)
+        top_indices = np.argpartition(jaccard_array, -top_num)[-top_num:]
+        sorted_top_indices = top_indices[np.argsort(jaccard_array[top_indices])]
+        # Descending order
+        sorted_top_indices = sorted_top_indices[::-1].tolist()
+
+
+        for i, cand_index in enumerate(sorted_top_indices):
+            jaccard = jaccards[cand_index]
+            dataset_index = dataset_indices[cand_index]
+            method2 = proto_cand_dataset[dataset_index]
+
+            if i == 0:
+                # This is the best one.
+                total_bleu += get_bleu(gold_seq=method['code'],
+                                       pred_seq=method2['code'])
+
+            add_prototype_in_rec(rec=method, proto_rec=method2, i=i, dataset_index=dataset_index,
+                                 jaccard=jaccard)
+
+
+        # method2 = proto_cand_dataset[best_index]
+        # total_bleu += get_bleu(gold_seq=method['code'],
+        #                        pred_seq=method2['code'])
+        # add_prototype_in_rec(rec=method, proto_rec=method2, i=0, dataset_index=best_index)
     print(total_bleu / len(dataset), "bleu NL jaccard, from train")
 
 
@@ -407,7 +446,7 @@ def pair_jaccard_nl_within_class(path2methods, nl_len=25):
 
             total_bleu += get_bleu(gold_seq=m['code'],
                                    pred_seq=max_rec['code'])
-            add_prototype_in_rec(rec=m, proto_rec=max_rec)
+            add_prototype_in_rec(rec=m, proto_rec=max_rec, i=0, dataset_index=0)
 
     print(total_bleu / len(flatten(path2methods)), "bleu NL jaccard, within class")
 
@@ -416,11 +455,12 @@ def read(dataset_file):
     # print(dataset_file)
     dataset = []
     with open(dataset_file, 'r') as file:
-        for i,line in enumerate(file):
-            dataset.append(json.loads(line))
-            # if i > 500:
-            #     return dataset
-            # return json.load(file)
+        return json.load(file)
+        # for i,line in enumerate(file):
+        #     dataset.append(json.loads(line))
+        #     # if i > 500:
+        #     #     return dataset
+        #     # return json.load(file)
     return dataset
 
 def dump(dataset, outdir, filename, num):
@@ -434,30 +474,34 @@ if __name__ == '__main__':
     parser.add_argument("--outdir", dest="outdir")
     args = parser.parse_args()
 
+
     dataset_lens = {'train': 100000,
                     'valid': 2000,
                     # "test": 2000
                     }
 
+    # dataset_lens = {'train': 500,
+    #                 'valid': 200,
+    #                 # "test": 2000
+    #                 }
+
     datasets = {}
     for dt, num_recs in dataset_lens.items():
         print('Reading', dt, '='*30)
-        dataset_filename = os.path.join(args.indir,"%s_shuffled.json" % (dt))
+        dataset_filename = os.path.join(args.indir,"%s.dataset" % (dt))
 
         # Commenting out filtering to keep dataset consistent.
         # dataset = get_filtered_dataset(dataset_filename)
         dataset = read(dataset_filename)
         datasets[dt] = limit(dataset, num_recs)
 
-    # dump(flatten(datasets['train']), args.outdir, 'train-small.dataset', 8000)
-
-    for dt in dataset_lens.keys():
+    # can change this back to dataset_lens.keys()
+    for dt in ['valid', 'train']:
         print('Processing', dt, '=' * 30)
         num_recs = dataset_lens[dt]
         # path2methods = datasets[dt]
         # dataset_lst = flatten(path2methods)
         dataset = datasets[dt]
-
         # pair_jaccard_nl_from_train_lsh(dataset,
         #                  proto_cand_dataset=datasets['train'],#flatten(datasets['train']),
         #                   nl_len=25)
@@ -486,8 +530,16 @@ if __name__ == '__main__':
         #      "%s-filtered-proto-oraclebleu-class.dataset" % (dt),
         #      num_recs)
 
+    for dt in ['valid', 'train']:
+        print('Processing', dt, '=' * 30)
+        num_recs = dataset_lens[dt]
+        # path2methods = datasets[dt]
+        # dataset_lst = flatten(path2methods)
+        dataset = datasets[dt]
 
-
-
-
-# TODO(VERIFY) that no similarity between train and valid
+        pair_jaccard_nl_from_train_lsh(dataset,
+                         proto_cand_dataset=datasets['train'],#flatten(datasets['train']),
+                          nl_len=25)
+        dump(dataset, args.outdir,
+                 "%s-3proto-nljaccard-all.dataset" % (dt),
+                 num_recs)
